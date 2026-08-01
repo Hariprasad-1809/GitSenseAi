@@ -321,7 +321,7 @@ export function LandingPage() {
             <span className="cursor-pointer hover:text-[#d4af37] transition-colors uppercase font-bold" onClick={() => setIsContactOpen(true)}>
               [ Contact support ]
             </span>
-            <a href="https://github.com" target="_blank" rel="noreferrer" className="hover:text-[#d4af37] transition-colors uppercase font-bold">
+            <a href="https://github.com/Hariprasad-1809/GitSenseAi" target="_blank" rel="noreferrer" className="hover:text-[#d4af37] transition-colors uppercase font-bold">
               [ Github repo ]
             </a>
           </div>

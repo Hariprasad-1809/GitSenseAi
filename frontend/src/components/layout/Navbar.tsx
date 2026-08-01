@@ -38,7 +38,7 @@ export function Navbar() {
               </button>
 
               <a
-                href="https://github.com"
+                href="https://github.com/Hariprasad-1809/GitSenseAi"
                 target="_blank"
                 rel="noreferrer"
                 className="text-[#6b6b6b] hover:text-[#d4af37] transition-colors p-1.5 hover:bg-[#181818] rounded-none focus:outline-none border border-transparent hover:border-[#2b2b2b]"
