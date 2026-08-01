@@ -50,6 +50,7 @@ export function ChatPage() {
   const [isSubmittingZip, setIsSubmittingZip] = useState(false);
 
   const [pollingStatus, setPollingStatus] = useState<string>('queued');
+  const [lastActiveStatus, setLastActiveStatus] = useState<string>('queued');
   const [filesProcessed, setFilesProcessed] = useState(0);
   const [totalFiles, setTotalFiles] = useState(0);
   const [ingestionError, setIngestionError] = useState<string | null>(null);
@@ -77,18 +78,23 @@ export function ChatPage() {
           setTotalFiles(statusRes.total_files);
           setIngestionError(statusRes.error);
 
+          if (statusRes.status !== 'failed') {
+            setLastActiveStatus(statusRes.status);
+          }
+
           if (statusRes.status === 'completed') {
             toast.success('Indexing completed.');
-            setIngestionState(null, false);
             clearInterval(intervalId);
             await refreshProjects();
             
             const list = await apiService.listProjects();
             const newProj = list.find(p => p.project_id === ingestionProjectId);
-            if (newProj) selectProject(newProj);
+            if (newProj) {
+              await selectProject(newProj);
+            }
+            setIngestionState(null, false);
           } else if (statusRes.status === 'failed') {
             toast.error(`Indexing failed: ${statusRes.error || 'Unknown error'}`);
-            setIngestionState(null, false);
             clearInterval(intervalId);
             await refreshProjects();
           }
@@ -104,7 +110,7 @@ export function ChatPage() {
     return () => {
       if (intervalId) clearInterval(intervalId);
     };
-  }, [isIngesting, ingestionProjectId, refreshProjects, selectProject, setIngestionState, projects]);
+  }, [isIngesting, ingestionProjectId, refreshProjects, selectProject, setIngestionState]);
 
   const handleGithubSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -117,6 +123,7 @@ export function ChatPage() {
       setGithubUrl('');
       setIngestionState(res.project_id, true);
       setPollingStatus('queued');
+      setLastActiveStatus('queued');
       setFilesProcessed(0);
       setTotalFiles(0);
       setIngestionError(null);
@@ -140,6 +147,7 @@ export function ChatPage() {
       setSelectedZip(null);
       setIngestionState(res.project_id, true);
       setPollingStatus('queued');
+      setLastActiveStatus('queued');
       setFilesProcessed(0);
       setTotalFiles(0);
       setIngestionError(null);
@@ -448,33 +456,69 @@ export function ChatPage() {
               {/* Steps checklists */}
               {/* Completed checks use #4ade80 (Green) success states */}
               <div className="pt-3 border-t border-[#2b2b2b] space-y-2.5 text-[10px] text-[#6b6b6b]/65 font-mono">
-                <div className="flex items-center gap-2">
-                  <span className={pollingStatus !== 'queued' ? 'text-[#4ade80]' : 'text-[#f5c542]'}>
-                    {pollingStatus !== 'queued' ? '[x]' : '[ ]'}
-                  </span>
-                  <span className={pollingStatus !== 'queued' ? 'text-[#6b6b6b]/50' : 'text-[#ffffff] font-bold'}>
-                    1. SOURCE_CLONE_RESOLVED
-                  </span>
-                </div>
-                
-                <div className="flex items-center gap-2">
-                  <span className={pollingStatus === 'processing' ? 'text-[#f5c542] animate-pulse' : pollingStatus === 'completed' ? 'text-[#4ade80]' : 'text-[#6b6b6b]/30'}>
-                    {pollingStatus === 'processing' ? '[>]' : pollingStatus === 'completed' ? '[x]' : '[ ]'}
-                  </span>
-                  <span className={pollingStatus === 'processing' ? 'text-[#ffffff] font-bold' : 'text-[#6b6b6b]/60'}>
-                    2. AST_LEX_PARSING_COMPILING
-                  </span>
-                </div>
-
-                <div className="flex items-center gap-2">
-                  <span className={pollingStatus === 'completed' ? 'text-[#4ade80]' : 'text-[#6b6b6b]/35'}>
-                    {pollingStatus === 'completed' ? '[x]' : '[ ]'}
-                  </span>
-                  <span className={pollingStatus === 'completed' ? 'text-[#ffffff] font-bold' : 'text-[#6b6b6b]/40'}>
-                    3. VECTOR_DB_BATCH_WRITES
-                  </span>
-                </div>
+                {(() => {
+                  const stepsOrder = ['queued', 'cloning', 'parsing', 'generating embeddings', 'saving', 'completed'];
+                  const activeIndex = stepsOrder.indexOf(lastActiveStatus.toLowerCase() === 'processing' ? 'parsing' : lastActiveStatus.toLowerCase());
+                  
+                  return [
+                    { key: 'queued', label: '1. QUEUED' },
+                    { key: 'cloning', label: '2. CLONING' },
+                    { key: 'parsing', label: '3. PARSING' },
+                    { key: 'generating embeddings', label: '4. GENERATING EMBEDDINGS' },
+                    { key: 'saving', label: '5. SAVING' },
+                    { key: 'completed', label: '6. COMPLETED' }
+                  ].map((step, idx) => {
+                    let symbol = '[ ]';
+                    let colorClass = 'text-[#6b6b6b]/35';
+                    let textClass = 'text-[#6b6b6b]/60';
+                    
+                    if (pollingStatus === 'failed') {
+                      if (idx < activeIndex) {
+                        symbol = '[x]';
+                        colorClass = 'text-[#4ade80]';
+                        textClass = 'text-[#6b6b6b]/50';
+                      } else if (idx === activeIndex) {
+                        symbol = '[!]';
+                        colorClass = 'text-red-500 font-bold';
+                        textClass = 'text-red-500 font-bold';
+                      }
+                    } else {
+                      if (idx < activeIndex || (idx === activeIndex && step.key === 'completed')) {
+                        symbol = '[x]';
+                        colorClass = 'text-[#4ade80]';
+                        textClass = 'text-[#6b6b6b]/50';
+                      } else if (idx === activeIndex) {
+                        symbol = '[>]';
+                        colorClass = 'text-[#f5c542] animate-pulse';
+                        textClass = 'text-[#ffffff] font-bold';
+                      }
+                    }
+                    
+                    return (
+                      <div key={step.key} className="flex items-center gap-2">
+                        <span className={colorClass}>{symbol}</span>
+                        <span className={textClass}>{step.label}</span>
+                      </div>
+                    );
+                  });
+                })()}
               </div>
+
+              {/* Error message display if failed */}
+              {pollingStatus === 'failed' && (
+                <div className="mt-4 pt-3 border-t border-[#2b2b2b] text-[10px] text-red-500 font-mono">
+                  <div className="font-bold uppercase tracking-wider mb-1 text-red-400">// ERROR_DETAILS</div>
+                  <p className="text-zinc-400 leading-normal mb-3">{ingestionError || 'An unknown error occurred during indexing.'}</p>
+                  <Button 
+                    onClick={() => setIngestionState(null, false)} 
+                    variant="outline" 
+                    size="sm"
+                    className="w-full border-red-500/30 text-red-400 hover:text-red-300 hover:bg-red-950/20 py-1"
+                  >
+                    <span>CLOSE_RETURN</span>
+                  </Button>
+                </div>
+              )}
             </div>
           </div>
         ) : (

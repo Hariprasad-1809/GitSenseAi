@@ -1,5 +1,6 @@
 import logging
 import uuid
+import asyncio
 from pathlib import Path
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, UploadFile, status
 from fastapi.concurrency import run_in_threadpool
@@ -21,6 +22,8 @@ async def process_zip_ingestion(project_id: uuid.UUID, zip_path: Path, filename:
     """
     try:
         project_name = filename.rsplit(".", 1)[0]
+        # Update status to cloning
+        await update_project_status(project_id, "cloning")
         # Wrap blocking zip extraction in threadpool
         repo_path = await run_in_threadpool(extract_zip, zip_path, str(project_id))
         
@@ -50,6 +53,8 @@ async def process_github_ingestion(project_id: uuid.UUID, repo_url: str) -> None
         if project_name.endswith(".git"):
             project_name = project_name[:-4]
             
+        # Update status to cloning
+        await update_project_status(project_id, "cloning")
         # Wrap blocking cloning operation in threadpool
         repo_path = await run_in_threadpool(clone_github, repo_url, str(project_id))
         
@@ -106,8 +111,8 @@ async def ingest_zip(
     await create_project(project_id, session_id, file.filename.rsplit(".", 1)[0])
     await update_project_status(project_id, "queued")
 
-    # Queue background task
-    background_tasks.add_task(process_zip_ingestion, project_id, temp_zip_path, file.filename)
+    # Queue background task using asyncio.create_task
+    asyncio.create_task(process_zip_ingestion(project_id, temp_zip_path, file.filename))
 
     return {
         "project_id": str(project_id),
@@ -156,8 +161,8 @@ async def ingest_github(
     await create_project(project_id, session_id, project_name, repo_url=repo_url_str)
     await update_project_status(project_id, "queued")
 
-    # Queue background task
-    background_tasks.add_task(process_github_ingestion, project_id, repo_url_str)
+    # Queue background task using asyncio.create_task
+    asyncio.create_task(process_github_ingestion(project_id, repo_url_str))
 
     return {
         "project_id": str(project_id),

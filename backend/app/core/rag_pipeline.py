@@ -3,6 +3,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 import aiofiles
+from fastapi.concurrency import run_in_threadpool
 from app.core.chunker import chunk_file
 from app.core.embedder import get_embedder
 from app.core.llm import call_gemini_async
@@ -48,7 +49,7 @@ async def run_indexing_pipeline(project_id: UUID, project_name: str, repo_path: 
 
         await update_project_status(
             project_id, 
-            "processing", 
+            "parsing", 
             files_processed=0, 
             total_files=total_files
         )
@@ -79,8 +80,8 @@ async def run_indexing_pipeline(project_id: UUID, project_name: str, repo_path: 
                 # Sanitize the file content before chunking
                 content = sanitize_text(content)
                 
-                # Run chunking
-                file_chunks = chunk_file(content, ext, str(project_id), relative_path)
+                # Run chunking in a threadpool to prevent blocking the event loop
+                file_chunks = await run_in_threadpool(chunk_file, content, ext, str(project_id), relative_path)
                 
                 # Sanitize chunk contents
                 for chunk in file_chunks:
@@ -101,18 +102,38 @@ async def run_indexing_pipeline(project_id: UUID, project_name: str, repo_path: 
             # Embed and insert chunks in batches to prevent memory bloat
             if len(chunk_batch) >= 100:
                 try:
+                    await update_project_status(
+                        project_id,
+                        "generating embeddings",
+                        files_processed=files_processed,
+                        total_files=total_files
+                    )
                     logger.info(f"Embedding batch of {len(chunk_batch)} chunks...")
                     for chunk in chunk_batch:
                         chunk["content"] = sanitize_text(chunk["content"])
                     
                     texts = [c["content"] for c in chunk_batch]
-                    embeddings = embedder.embed_chunks(texts)
+                    embeddings = await run_in_threadpool(embedder.embed_chunks, texts)
                     
                     for chunk, emb in zip(chunk_batch, embeddings):
                         chunk["embedding"] = emb
                         
+                    await update_project_status(
+                        project_id,
+                        "saving",
+                        files_processed=files_processed,
+                        total_files=total_files
+                    )
                     await insert_chunks(chunk_batch)
                     chunk_batch.clear()
+
+                    # Set status back to parsing since we are continuing the file loop
+                    await update_project_status(
+                        project_id,
+                        "parsing",
+                        files_processed=files_processed,
+                        total_files=total_files
+                    )
                 except Exception as batch_exc:
                     logger.error(f"Failed to insert batch of chunks: {batch_exc}. Continuing.")
                     chunk_batch.clear()
@@ -121,7 +142,7 @@ async def run_indexing_pipeline(project_id: UUID, project_name: str, repo_path: 
             if files_processed % 10 == 0:
                 await update_project_status(
                     project_id, 
-                    "processing", 
+                    "parsing", 
                     files_processed=files_processed, 
                     total_files=total_files
                 )
@@ -129,16 +150,28 @@ async def run_indexing_pipeline(project_id: UUID, project_name: str, repo_path: 
         # Process any remaining chunks
         if chunk_batch:
             try:
+                await update_project_status(
+                    project_id,
+                    "generating embeddings",
+                    files_processed=files_processed,
+                    total_files=total_files
+                )
                 logger.info(f"Embedding final batch of {len(chunk_batch)} chunks...")
                 for chunk in chunk_batch:
                     chunk["content"] = sanitize_text(chunk["content"])
                 
                 texts = [c["content"] for c in chunk_batch]
-                embeddings = embedder.embed_chunks(texts)
+                embeddings = await run_in_threadpool(embedder.embed_chunks, texts)
                 
                 for chunk, emb in zip(chunk_batch, embeddings):
                     chunk["embedding"] = emb
                     
+                await update_project_status(
+                    project_id,
+                    "saving",
+                    files_processed=files_processed,
+                    total_files=total_files
+                )
                 await insert_chunks(chunk_batch)
                 chunk_batch.clear()
             except Exception as batch_exc:
@@ -148,6 +181,12 @@ async def run_indexing_pipeline(project_id: UUID, project_name: str, repo_path: 
         # Save indexed file list
         try:
             if file_entries:
+                await update_project_status(
+                    project_id,
+                    "saving",
+                    files_processed=files_processed,
+                    total_files=total_files
+                )
                 await insert_project_files(project_id, file_entries)
         except Exception as e:
             logger.warning(f"Failed to save indexed file list metadata: {e}")
