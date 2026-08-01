@@ -1,0 +1,45 @@
+# Sensitive configuration files
+.env
+.env.local
+.env.*
+backend/.env
+frontend/.env
+
+# User-requested exclusions
+explanation.txt
+
+# Package manager and build output
+node_modules/
+dist/
+dist-ssr/
+*.local
+
+# Python files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+pip-log.txt
+pip-delete-this-directory.txt
+.tox/
+.coverage
+.cache
+nosetests.xml
+coverage.xml
+htmlcov/
+*.coveragerc
+.ipynb_checkpoints/
+
+# Temporary and local data files
+data/
+backend/data/
+backend/scratch/
+backend/package-lock.json
+
+# OS files
+.DS_Store
+Thumbs.db

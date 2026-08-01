@@ -1,0 +1,108 @@
+@import "tailwindcss";
+
+@theme {
+  --color-border: #2b2b2b;
+  --color-input: #181818;
+  --color-ring: #d4af37;
+  --color-background: #0a0a0a;
+  --color-foreground: #ffffff;
+  
+  --color-primary: #d4af37;
+  --color-primary-foreground: #0a0a0a;
+  
+  --color-secondary: #181818;
+  --color-secondary-foreground: #ffffff;
+  
+  --color-muted: #181818;
+  --color-muted-foreground: #6b6b6b;
+  
+  --color-accent: #f5c542;
+  --color-accent-foreground: #0a0a0a;
+  
+  --color-popover: #181818;
+  --color-popover-foreground: #ffffff;
+  
+  --color-card: #181818;
+  --color-card-foreground: #ffffff;
+
+  --font-mono: 'JetBrains Mono', 'Fira Code', 'ui-monospace', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  --font-sans: 'Outfit', 'Helvetica Neue', system-ui, -apple-system, sans-serif;
+
+  --radius-lg: 0px;
+  --radius-md: 0px;
+  --radius-sm: 0px;
+}
+
+@layer base {
+  * {
+    border-color: var(--color-border);
+    box-sizing: border-box;
+  }
+  
+  body {
+    background-color: var(--color-background);
+    color: var(--color-foreground);
+    font-family: var(--font-sans);
+    margin: 0;
+    padding: 0;
+    overflow-x: hidden;
+    
+    /* Technical Grid background in sharp Onyx border lines */
+    background-size: 40px 40px;
+    background-image: 
+      linear-gradient(to right, rgba(43, 43, 43, 0.4) 1px, transparent 1px),
+      linear-gradient(to bottom, rgba(43, 43, 43, 0.4) 1px, transparent 1px);
+    background-position: center top;
+  }
+
+  code, pre, .font-mono, button, input, select, textarea, label {
+    font-family: var(--font-mono) !important;
+  }
+}
+
+/* Custom scrollbars */
+::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #181818;
+  border-radius: 0px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #d4af37;
+}
+
+/* Precise focus ring */
+.focus-ring {
+  outline: none;
+  box-shadow: 0 0 0 1px #d4af37;
+}
+
+/* Onyx Gold Gradient utilities */
+.bg-aurora-gradient {
+  background: linear-gradient(135deg, #d4af37 0%, #f5c542 100%);
+}
+
+.text-aurora-gradient {
+  background: linear-gradient(135deg, #d4af37 0%, #f5c542 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.border-aurora-gradient {
+  border-image: linear-gradient(135deg, #d4af37 0%, #f5c542 100%) 1;
+}
+
+/* Keyframes for micro-animations */
+@keyframes pulseGlow {
+  0%, 100% { opacity: 0.5; }
+  50% { opacity: 0.9; }
+}
+
+.glow-active {
+  animation: pulseGlow 2s infinite ease-in-out;
+}
