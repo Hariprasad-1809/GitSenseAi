@@ -134,6 +134,9 @@ async def init_db_pool() -> None:
             conninfo=settings.DATABASE_URL,
             min_size=1,
             max_size=4,
+            max_idle=45.0,
+            max_lifetime=300.0,
+            timeout=10.0,
             kwargs={"row_factory": dict_row, "connect_timeout": 5},
             open=False
         )
@@ -196,6 +199,9 @@ async def init_db(schema_path: str = "app/db/schema.sql") -> None:
                     await cur.execute("DROP TABLE IF EXISTS projects CASCADE;")
                     await cur.execute("DROP TABLE IF EXISTS sessions CASCADE;")
                 await cur.execute(schema_sql)
+                await cur.execute("ALTER TABLE projects ADD COLUMN IF NOT EXISTS current_file TEXT DEFAULT '';")
+                await cur.execute("ALTER TABLE chunks ADD COLUMN IF NOT EXISTS metadata JSONB DEFAULT '{}'::jsonb;")
+                await cur.execute("ALTER TABLE files ADD COLUMN IF NOT EXISTS file_hash VARCHAR(64);")
         logger.info("Database schema initialized successfully.")
     except Exception as e:
         logger.exception("Failed to initialize database schema")
@@ -282,3 +288,40 @@ async def get_project_session_id(project_id: uuid.UUID) -> Optional[uuid.UUID]:
             )
             row = await cur.fetchone()
             return row["session_id"] if row else None
+
+
+async def get_cached_intelligence(project_id: uuid.UUID, cache_key: str) -> Optional[dict]:
+    """
+    Retrieves cached intelligence (summaries, graphs, workflows) for a project.
+    """
+    async with get_db_connection() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                """
+                SELECT cache_key, content, metadata, created_at
+                FROM intelligence_cache
+                WHERE project_id = %s AND cache_key = %s;
+                """,
+                (project_id, cache_key)
+            )
+            return await cur.fetchone()
+
+
+async def save_cached_intelligence(project_id: uuid.UUID, cache_key: str, content: str, metadata: Optional[dict] = None) -> None:
+    """
+    Saves or updates cached intelligence for a project.
+    """
+    import json
+    meta_json = json.dumps(metadata or {})
+    async with get_db_connection() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                """
+                INSERT INTO intelligence_cache (project_id, cache_key, content, metadata)
+                VALUES (%s, %s, %s, %s::jsonb)
+                ON CONFLICT (project_id, cache_key)
+                DO UPDATE SET content = EXCLUDED.content, metadata = EXCLUDED.metadata, created_at = NOW();
+                """,
+                (project_id, cache_key, content, meta_json)
+            )
+

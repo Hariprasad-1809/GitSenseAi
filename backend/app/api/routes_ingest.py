@@ -5,9 +5,9 @@ from pathlib import Path
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, UploadFile, status
 from fastapi.concurrency import run_in_threadpool
 from app.config import settings
-from app.core.extractor import clone_github, extract_zip
+from app.core.extractor import cleanup_project_files, clone_github, extract_zip
 from app.core.rag_pipeline import run_indexing_pipeline
-from app.core.vectorstore import get_project_status, update_project_status, create_project, list_projects
+from app.core.vectorstore import create_project, delete_project, get_project_status, list_projects, update_project_status
 from app.models.schemas import GithubIngestRequest, IngestStatusResponse
 from app.api.dependencies import get_active_session_id, validate_project_session
 
@@ -81,14 +81,16 @@ async def ingest_zip(
             detail="Invalid file format. Only ZIP archives are supported."
         )
 
-    # Enforce one repository per session limit
+    # Clean up any existing repository for this session to allow seamless new ingestion
     existing_projects = await list_projects(session_id)
-    if existing_projects:
-        logger.warning(f"Ingestion rejected: Session {session_id} already has an active repository.")
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Session already has an active repository. Only one repository per session is allowed."
-        )
+    for old_proj in existing_projects:
+        old_id = old_proj["project_id"]
+        logger.info(f"Automatically replacing existing project {old_id} for session {session_id}...")
+        try:
+            await delete_project(old_id)
+            await run_in_threadpool(cleanup_project_files, str(old_id))
+        except Exception as cleanup_err:
+            logger.warning(f"Error cleaning up old project {old_id}: {cleanup_err}")
 
     project_id = uuid.uuid4()
     
@@ -140,14 +142,16 @@ async def ingest_github(
             detail="Unsupported repository host. Only public GitHub HTTPS repositories are supported."
         )
 
-    # Enforce one repository per session limit
+    # Clean up any existing repository for this session to allow seamless new ingestion
     existing_projects = await list_projects(session_id)
-    if existing_projects:
-        logger.warning(f"Ingestion rejected: Session {session_id} already has an active repository.")
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Session already has an active repository. Only one repository per session is allowed."
-        )
+    for old_proj in existing_projects:
+        old_id = old_proj["project_id"]
+        logger.info(f"Automatically replacing existing project {old_id} for session {session_id}...")
+        try:
+            await delete_project(old_id)
+            await run_in_threadpool(cleanup_project_files, str(old_id))
+        except Exception as cleanup_err:
+            logger.warning(f"Error cleaning up old project {old_id}: {cleanup_err}")
 
     project_id = uuid.uuid4()
     

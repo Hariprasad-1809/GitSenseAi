@@ -53,6 +53,7 @@ export function ChatPage() {
   const [lastActiveStatus, setLastActiveStatus] = useState<string>('queued');
   const [filesProcessed, setFilesProcessed] = useState(0);
   const [totalFiles, setTotalFiles] = useState(0);
+  const [percentage, setPercentage] = useState<number>(0);
   const [ingestionError, setIngestionError] = useState<string | null>(null);
 
   const [question, setQuestion] = useState('');
@@ -61,10 +62,41 @@ export function ChatPage() {
   const [selectedCitation, setSelectedCitation] = useState<SourceCitation | null>(null);
 
   const chatBottomRef = useRef<HTMLDivElement>(null);
+  const hasShownCompletionToastRef = useRef<boolean>(false);
 
   useEffect(() => {
     chatBottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [chatHistory, isSendingQuery]);
+
+  const calculateStageProgress = (status: string, processed: number, total: number): number => {
+    const s = status.toLowerCase().trim();
+    if (s === 'completed') return 100;
+    if (s === 'queued' || s === 'failed') return 0;
+
+    let baseMin = 0;
+    let baseMax = 99;
+
+    if (s === 'cloning') {
+      baseMin = 5;
+      baseMax = 15;
+    } else if (s === 'parsing' || s === 'processing') {
+      baseMin = 15;
+      baseMax = 60;
+    } else if (s === 'generating embeddings' || s === 'generating_embeddings') {
+      baseMin = 60;
+      baseMax = 90;
+    } else if (s === 'saving') {
+      baseMin = 90;
+      baseMax = 99;
+    }
+
+    if (total > 0 && (s === 'parsing' || s === 'processing')) {
+      const ratio = Math.min(Math.max(processed / total, 0), 1);
+      return Math.min(Math.round(baseMin + ratio * (baseMax - baseMin)), 59);
+    }
+
+    return Math.min(baseMax, 99);
+  };
 
   useEffect(() => {
     let intervalId: any;
@@ -73,38 +105,68 @@ export function ChatPage() {
       const checkStatus = async () => {
         try {
           const statusRes = await apiService.getIngestionStatus(ingestionProjectId);
-          setPollingStatus(statusRes.status);
-          setFilesProcessed(statusRes.files_processed);
-          setTotalFiles(statusRes.total_files);
-          setIngestionError(statusRes.error);
+          const computedPct = calculateStageProgress(statusRes.status, statusRes.files_processed, statusRes.total_files);
+
+          console.log(`[INGESTION_STATUS_POLL] project_id: ${ingestionProjectId}, status: ${statusRes.status}, files_processed: ${statusRes.files_processed}, total_files: ${statusRes.total_files}, progress: ${computedPct}%`);
+
+          setPollingStatus(prev => (prev !== statusRes.status ? statusRes.status : prev));
+          setFilesProcessed(prev => (prev !== statusRes.files_processed ? statusRes.files_processed : prev));
+          setTotalFiles(prev => (prev !== statusRes.total_files ? statusRes.total_files : prev));
+          setPercentage(prev => (prev !== computedPct ? computedPct : prev));
+          setIngestionError(prev => (prev !== statusRes.error ? statusRes.error : prev));
 
           if (statusRes.status !== 'failed') {
-            setLastActiveStatus(statusRes.status);
+            setLastActiveStatus(prev => (prev !== statusRes.status ? statusRes.status : prev));
           }
 
           if (statusRes.status === 'completed') {
-            toast.success('Indexing completed.');
-            clearInterval(intervalId);
-            await refreshProjects();
-            
-            const list = await apiService.listProjects();
-            const newProj = list.find(p => p.project_id === ingestionProjectId);
-            if (newProj) {
-              await selectProject(newProj);
+            // Destroy polling interval immediately
+            if (intervalId) clearInterval(intervalId);
+
+            // Trigger success toast ONCE
+            if (!hasShownCompletionToastRef.current) {
+              hasShownCompletionToastRef.current = true;
+              toast.success('Indexing completed successfully!');
             }
+
+            console.log(`[INGESTION_COMPLETED] project_id: ${ingestionProjectId} achieved completed state. Stopping polling and switching to chat.`);
+
+            setPercentage(100);
+            setPollingStatus('completed');
+            setLastActiveStatus('completed');
+
+            await refreshProjects();
+
+            const list = await apiService.listProjects();
+            let targetProj = list.find(p => p.project_id === ingestionProjectId);
+            if (!targetProj) {
+              targetProj = {
+                project_id: ingestionProjectId,
+                project_name: 'Ingested Codebase',
+                language_summary: {},
+                file_count: statusRes.total_files || statusRes.files_processed,
+                ingestion_date: new Date().toISOString(),
+                status: 'completed'
+              };
+            }
+
+            await selectProject(targetProj);
+
+            // Clear ingestion mode to automatically transition to Chat screen
             setIngestionState(null, false);
           } else if (statusRes.status === 'failed') {
+            console.error(`[INGESTION_FAILED] project_id: ${ingestionProjectId}, error: ${statusRes.error}`);
+            if (intervalId) clearInterval(intervalId);
             toast.error(`Indexing failed: ${statusRes.error || 'Unknown error'}`);
-            clearInterval(intervalId);
             await refreshProjects();
           }
         } catch (error) {
-          console.error('Error polling status:', error);
+          console.error('[INGESTION_STATUS_ERROR] Error polling status for project:', ingestionProjectId, error);
         }
       };
 
       checkStatus();
-      intervalId = setInterval(checkStatus, 2000);
+      intervalId = setInterval(checkStatus, 1500);
     }
 
     return () => {
@@ -117,6 +179,7 @@ export function ChatPage() {
     if (!githubUrl.trim()) return;
 
     setIsSubmittingGithub(true);
+    hasShownCompletionToastRef.current = false;
     try {
       const res = await apiService.ingestGithub({ repo_url: githubUrl.trim() });
       toast.success(res.message);
@@ -126,11 +189,17 @@ export function ChatPage() {
       setLastActiveStatus('queued');
       setFilesProcessed(0);
       setTotalFiles(0);
+      setPercentage(0);
       setIngestionError(null);
     } catch (error: any) {
       console.error(error);
-      const errMsg = error.response?.data?.detail || 'Ingestion request failed.';
-      toast.error(errMsg);
+      if (error.response?.status === 401 || error.response?.status === 410) {
+        toast.error('Session expired or invalid. Creating a new session...');
+        await startNewSession();
+      } else {
+        const errMsg = error.response?.data?.detail || 'Ingestion request failed.';
+        toast.error(errMsg);
+      }
     } finally {
       setIsSubmittingGithub(false);
     }
@@ -141,6 +210,7 @@ export function ChatPage() {
     if (!selectedZip) return;
 
     setIsSubmittingZip(true);
+    hasShownCompletionToastRef.current = false;
     try {
       const res = await apiService.ingestZip(selectedZip);
       toast.success(res.message);
@@ -150,11 +220,17 @@ export function ChatPage() {
       setLastActiveStatus('queued');
       setFilesProcessed(0);
       setTotalFiles(0);
+      setPercentage(0);
       setIngestionError(null);
     } catch (error: any) {
       console.error(error);
-      const errMsg = error.response?.data?.detail || 'ZIP Ingestion failed.';
-      toast.error(errMsg);
+      if (error.response?.status === 401 || error.response?.status === 410) {
+        toast.error('Session expired or invalid. Creating a new session...');
+        await startNewSession();
+      } else {
+        const errMsg = error.response?.data?.detail || 'ZIP Ingestion failed.';
+        toast.error(errMsg);
+      }
     } finally {
       setIsSubmittingZip(false);
     }
@@ -223,15 +299,15 @@ export function ChatPage() {
 
   const renderProgressBar = () => {
     const totalBlocks = 20;
-    const percentage = totalFiles > 0 ? filesProcessed / totalFiles : 0;
-    const filledBlocks = Math.round(percentage * totalBlocks);
+    const currentPct = percentage;
+    const pctFrac = Math.min(Math.max(currentPct / 100, 0), 1);
+    const filledBlocks = Math.round(pctFrac * totalBlocks);
     const emptyBlocks = totalBlocks - filledBlocks;
     const bar = '[' + '='.repeat(filledBlocks) + '.'.repeat(emptyBlocks) + ']';
-    // AI active loader: use Bright Gold #F5C542
     return (
       <div className="font-mono text-xs text-[#6b6b6b] mt-2">
         <span className="text-[#f5c542] font-bold">{bar}</span>
-        <span className="ml-2 font-bold text-[#d4af37]">{(percentage * 100).toFixed(0)}%</span>
+        <span className="ml-2 font-bold text-[#d4af37]">{currentPct.toFixed(0)}%</span>
       </div>
     );
   };
@@ -458,7 +534,9 @@ export function ChatPage() {
               <div className="pt-3 border-t border-[#2b2b2b] space-y-2.5 text-[10px] text-[#6b6b6b]/65 font-mono">
                 {(() => {
                   const stepsOrder = ['queued', 'cloning', 'parsing', 'generating embeddings', 'saving', 'completed'];
-                  const activeIndex = stepsOrder.indexOf(lastActiveStatus.toLowerCase() === 'processing' ? 'parsing' : lastActiveStatus.toLowerCase());
+                  let normalizedStatus = lastActiveStatus.toLowerCase().replace(/_/g, ' ').trim();
+                  if (normalizedStatus === 'processing') normalizedStatus = 'parsing';
+                  const activeIndex = Math.max(0, stepsOrder.indexOf(normalizedStatus));
                   
                   return [
                     { key: 'queued', label: '1. QUEUED' },

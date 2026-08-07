@@ -20,18 +20,20 @@ CREATE TABLE IF NOT EXISTS projects (
     status TEXT NOT NULL DEFAULT 'queued', -- queued, processing, completed, failed
     files_processed INTEGER DEFAULT 0,
     total_files INTEGER DEFAULT 0,
+    current_file TEXT DEFAULT '',
     error TEXT,
     started_at TIMESTAMPTZ,
     completed_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- Files Table (for general repository metadata lookup)
+-- Files Table (for general repository metadata lookup and incremental indexing)
 CREATE TABLE IF NOT EXISTS files (
     id SERIAL PRIMARY KEY,
     project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
     file_path TEXT NOT NULL,
     language TEXT NOT NULL,
+    file_hash VARCHAR(64),
     created_at TIMESTAMPTZ DEFAULT NOW(),
     UNIQUE (project_id, file_path)
 );
@@ -50,6 +52,7 @@ CREATE TABLE IF NOT EXISTS chunks (
     content TEXT NOT NULL,
     embedding VECTOR(384),
     chunking_method TEXT NOT NULL, -- ast, md, fallback
+    metadata JSONB DEFAULT '{}'::jsonb,
     fts_vector TSVECTOR GENERATED ALWAYS AS (to_tsvector('english', content)) STORED
 );
 
@@ -64,6 +67,17 @@ CREATE TABLE IF NOT EXISTS chat_history (
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- Intelligence Cache Table (for precomputed & lazily generated repository intelligence)
+CREATE TABLE IF NOT EXISTS intelligence_cache (
+    id SERIAL PRIMARY KEY,
+    project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    cache_key TEXT NOT NULL,
+    content TEXT NOT NULL,
+    metadata JSONB DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE (project_id, cache_key)
+);
+
 -- Create HNSW index for Pgvector Cosine Similarity
 CREATE INDEX IF NOT EXISTS chunks_embedding_idx ON chunks USING hnsw (embedding vector_cosine_ops);
 
@@ -75,3 +89,5 @@ CREATE INDEX IF NOT EXISTS chunks_project_id_idx ON chunks (project_id);
 CREATE INDEX IF NOT EXISTS files_project_id_idx ON files (project_id);
 CREATE INDEX IF NOT EXISTS chat_history_project_id_idx ON chat_history (project_id);
 CREATE INDEX IF NOT EXISTS chat_history_session_id_idx ON chat_history (session_id);
+CREATE INDEX IF NOT EXISTS intelligence_cache_project_key_idx ON intelligence_cache (project_id, cache_key);
+

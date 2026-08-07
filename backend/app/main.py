@@ -66,10 +66,21 @@ async def lifespan(app: FastAPI):
         
         # Run database initialization
         await init_db()
+        from pathlib import Path
         from app.config import settings
         logger.info("Loaded LLM_MODEL from environment:\n%s", settings.LLM_MODEL)
         logger.info("Session timeout: %d hours", settings.SESSION_TIMEOUT_HOURS)
         logger.info("Cleanup interval: %d minutes", settings.CLEANUP_INTERVAL_MINUTES)
+
+        app_dir = Path("app").resolve()
+        data_dir = Path("data").resolve()
+        repo_dir = settings.repo_path
+        upload_dir = settings.upload_path
+        scratch_dir = Path("scratch").resolve()
+
+        logger.info("Watched directories: %s", [str(app_dir)])
+        logger.info("Excluded directories: %s", [str(data_dir), str(repo_dir), str(upload_dir), str(scratch_dir)])
+        logger.info("Repository clone directory: %s", str(repo_dir))
     except Exception:
         logger.exception("Failed to initialize database during startup.")
         raise
@@ -99,13 +110,17 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# Enable CORS for local development ports
+# Enable CORS for local development ports and deployed frontend
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:3000",
-        "http://localhost:5173"
+        "http://localhost:5173",
+        "http://127.0.0.1:3000",
+        "http://127.0.0.1:5173",
+        "https://gitsenseai.onrender.com"
     ],
+    allow_origin_regex=r"https?://.*",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -202,4 +217,38 @@ async def root():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("app.main:app", host="127.0.0.1", port=8000, reload=True)
+    from pathlib import Path
+    from app.config import settings
+
+    app_dir = Path("app").resolve()
+    data_dir = Path("data").resolve()
+    repo_dir = settings.repo_path
+    upload_dir = settings.upload_path
+    scratch_dir = Path("scratch").resolve()
+
+    data_dir.mkdir(parents=True, exist_ok=True)
+    repo_dir.mkdir(parents=True, exist_ok=True)
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    scratch_dir.mkdir(parents=True, exist_ok=True)
+
+    reload_dirs = [str(app_dir)]
+    reload_excludes = [
+        str(data_dir),
+        str(repo_dir),
+        str(upload_dir),
+        str(scratch_dir),
+    ]
+
+    logger.info("Starting Uvicorn development server...")
+    logger.info("Watched directories: %s", reload_dirs)
+    logger.info("Excluded directories: %s", reload_excludes)
+    logger.info("Repository clone directory: %s", str(repo_dir))
+
+    uvicorn.run(
+        "app.main:app",
+        host="127.0.0.1",
+        port=8000,
+        reload=True,
+        reload_dirs=reload_dirs,
+        reload_excludes=reload_excludes
+    )

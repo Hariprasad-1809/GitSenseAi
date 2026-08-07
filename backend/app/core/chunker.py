@@ -1,10 +1,25 @@
 import logging
+import hashlib
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from tree_sitter_languages import get_parser
 from app.utils.language_map import get_treesitter_language
 
 logger = logging.getLogger(__name__)
+
+_TS_PARSER_CACHE: Dict[str, Any] = {}
+
+
+def compute_file_hash(content: str) -> str:
+    """Computes SHA-256 hash of file content string for fast incremental indexing checks."""
+    return hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+
+def get_cached_ts_parser(lang_name: str) -> Any:
+    """Returns cached tree-sitter parser instance to avoid re-instantiation per file."""
+    if lang_name not in _TS_PARSER_CACHE:
+        _TS_PARSER_CACHE[lang_name] = get_parser(lang_name)
+    return _TS_PARSER_CACHE[lang_name]
 
 
 def count_tokens_heuristic(text: str) -> int:
@@ -244,6 +259,48 @@ def traverse_ast(node: Any, source_bytes: bytes, parent_class: Optional[str] = N
     return symbols
 
 
+def extract_file_metadata(content: str, file_path: str, extension: str) -> Dict[str, Any]:
+    """
+    Extracts high-level file metadata such as module scope, imports, and framework detection.
+    """
+    import re
+    parts = file_path.split("/")
+    module_name = parts[0] if len(parts) > 1 else "root"
+    
+    imports = []
+    framework = "plain"
+    ext_lower = extension.lower()
+    
+    # Lightweight regex for imports and framework detection
+    if "python" in ext_lower or ext_lower == ".py":
+        imports = re.findall(r"^(?:from\s+([\w\.]+)|import\s+([\w\.]+))", content, re.MULTILINE)
+        flat_imports = [imp[0] or imp[1] for imp in imports if imp[0] or imp[1]]
+        imports = flat_imports[:10]
+        if "fastapi" in content:
+            framework = "fastapi"
+        elif "django" in content:
+            framework = "django"
+        elif "flask" in content:
+            framework = "flask"
+    elif any(x in ext_lower for x in ("js", "ts", "jsx", "tsx")):
+        imports = re.findall(r"import\s+.*?from\s+['\"](.*?)['\"]", content)
+        imports = imports[:10]
+        if "react" in content:
+            framework = "react"
+        elif "express" in content:
+            framework = "express"
+        elif "next" in content:
+            framework = "next"
+
+    return {
+        "module": module_name,
+        "imports": imports,
+        "framework": framework,
+        "file_path": file_path,
+        "extension": extension
+    }
+
+
 def chunk_code_file(
     content: str, 
     extension: str, 
@@ -256,9 +313,12 @@ def chunk_code_file(
     """
     ts_lang_name = get_treesitter_language(extension)
     lines = content.splitlines()
+    file_meta = extract_file_metadata(content, file_path, extension)
     
-    if not ts_lang_name:
-        # File type doesn't support AST chunking, run fallback
+    # 0. High file size safeguard (>500KB files bypass tree-sitter AST to prevent CPU bottlenecks)
+    if len(content) > 500000 or not ts_lang_name:
+        if len(content) > 500000:
+            logger.warning(f"File '{file_path}' exceeds 500KB ({len(content)} bytes). Bypassing Tree-sitter AST parser for performance.")
         fallback_chunks = fallback_chunker(content, token_limit=500, overlap=50)
         return [
             {
@@ -271,13 +331,14 @@ def chunk_code_file(
                 "start_line": c["start_line"],
                 "end_line": c["end_line"],
                 "content": c["content"],
-                "chunking_method": "fallback"
+                "chunking_method": "fallback",
+                "metadata": file_meta
             }
             for c in fallback_chunks
         ]
 
     try:
-        parser = get_parser(ts_lang_name)
+        parser = get_cached_ts_parser(ts_lang_name)
         source_bytes = bytes(content, "utf-8")
         tree = parser.parse(source_bytes)
         
@@ -295,6 +356,13 @@ def chunk_code_file(
             comments = get_preceding_comments(lines, start_line_idx, ts_lang_name)
             full_content = comments + sym["content"]
             
+            chunk_meta = dict(file_meta)
+            chunk_meta.update({
+                "class": sym.get("parent_class"),
+                "function": sym.get("symbol_name"),
+                "symbol_type": sym.get("symbol_type")
+            })
+
             chunks.append({
                 "project_id": project_id,
                 "file_path": file_path,
@@ -305,7 +373,8 @@ def chunk_code_file(
                 "start_line": sym["start_line"],
                 "end_line": sym["end_line"],
                 "content": full_content,
-                "chunking_method": "ast"
+                "chunking_method": "ast",
+                "metadata": chunk_meta
             })
             
         return chunks
@@ -324,7 +393,8 @@ def chunk_code_file(
                 "start_line": c["start_line"],
                 "end_line": c["end_line"],
                 "content": c["content"],
-                "chunking_method": "fallback"
+                "chunking_method": "fallback",
+                "metadata": file_meta
             }
             for c in fallback_chunks
         ]
@@ -339,6 +409,8 @@ def chunk_file(
     """
     Main entry point for chunking. Chooses chunking strategy based on file type.
     """
+    file_meta = extract_file_metadata(content, file_path, extension)
+
     # 1. Config files (.json, .yaml, .yml) NEVER use Tree-sitter
     if extension.lower() in (".json", ".yaml", ".yml", ".txt"):
         fallback_chunks = fallback_chunker(content, token_limit=500, overlap=50)
@@ -353,7 +425,8 @@ def chunk_file(
                 "start_line": c["start_line"],
                 "end_line": c["end_line"],
                 "content": c["content"],
-                "chunking_method": "fallback"
+                "chunking_method": "fallback",
+                "metadata": file_meta
             }
             for c in fallback_chunks
         ]
@@ -372,7 +445,8 @@ def chunk_file(
                 "start_line": c["start_line"],
                 "end_line": c["end_line"],
                 "content": c["content"],
-                "chunking_method": "markdown"
+                "chunking_method": "markdown",
+                "metadata": file_meta
             }
             for c in md_chunks
         ]
@@ -380,3 +454,4 @@ def chunk_file(
     # 3. Code files use Tree-sitter
     else:
         return chunk_code_file(content, extension, project_id, file_path)
+

@@ -30,7 +30,7 @@ apiClient.interceptors.request.use((config) => {
 export const apiService = {
   // Session Endpoints
   async createSession(): Promise<SessionResponse> {
-    const response = await apiClient.post<SessionResponse>('/api/sessions');
+    const response = await apiClient.post<SessionResponse>('/api/sessions', {}, { timeout: 15000 });
     return response.data;
   },
 

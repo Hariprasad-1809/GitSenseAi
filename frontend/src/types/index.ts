@@ -10,13 +10,15 @@ export interface GithubIngestRequest {
 
 export interface IngestStatusResponse {
   project_id: string;
-  status: 'queued' | 'processing' | 'completed' | 'failed';
+  status: 'queued' | 'cloning' | 'parsing' | 'generating embeddings' | 'saving' | 'processing' | 'completed' | 'failed' | string;
   files_processed: number;
   total_files: number;
+  percentage?: number;
   started_at: string | null;
   completed_at: string | null;
   error: string | null;
 }
+
 
 export interface SourceCitation {
   file_path: string;

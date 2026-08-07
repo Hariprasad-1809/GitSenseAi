@@ -12,7 +12,11 @@ EXTENSION_TO_TREESITTER = {
     ".c": "c",
     ".h": "c",
     ".cpp": "cpp",
-    ".hpp": "cpp"
+    ".hpp": "cpp",
+    ".go": "go",
+    ".rs": "rust",
+    ".rb": "ruby",
+    ".php": "php"
 }
 
 # Maps extensions to human-readable names for UI summaries
@@ -27,11 +31,23 @@ EXTENSION_TO_DISPLAY_NAME = {
     ".h": "C/C++ Header",
     ".cpp": "C++",
     ".hpp": "C++ Header",
+    ".go": "Go",
+    ".rs": "Rust",
+    ".rb": "Ruby",
+    ".php": "PHP",
+    ".cs": "C#",
+    ".sh": "Shell",
+    ".bash": "Shell",
+    ".css": "CSS",
+    ".html": "HTML",
+    ".sql": "SQL",
     ".md": "Markdown",
     ".txt": "Plain Text",
     ".json": "JSON Config",
     ".yaml": "YAML Config",
-    ".yml": "YAML Config"
+    ".yml": "YAML Config",
+    ".toml": "TOML Config",
+    ".xml": "XML Config"
 }
 
 

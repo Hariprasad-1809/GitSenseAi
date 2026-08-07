@@ -29,6 +29,8 @@ class IngestStatusResponse(BaseModel):
     status: str = Field(..., description="Status: queued | processing | completed | failed")
     files_processed: int = Field(0, description="Number of files successfully parsed and indexed.")
     total_files: int = Field(0, description="Total files discovered in the repository.")
+    percentage: float = Field(0.0, description="Calculated percentage of files processed (0.0 to 100.0).")
+    current_file: Optional[str] = Field(None, description="The relative path of the file currently being processed.")
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
     error: Optional[str] = None

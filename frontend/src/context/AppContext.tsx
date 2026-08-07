@@ -52,8 +52,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [isLoadingProjects, setIsLoadingProjects] = useState(false);
   const [isLoadingFiles, setIsLoadingFiles] = useState(false);
   const [isLoadingChat, setIsLoadingChat] = useState(false);
-  const [isIngesting, setIsIngesting] = useState(false);
-  const [ingestionProjectId, setIngestionProjectId] = useState<string | null>(null);
+  const [isIngesting, setIsIngesting] = useState<boolean>(() => {
+    return localStorage.getItem('gitsense_is_ingesting') === 'true';
+  });
+  const [ingestionProjectId, setIngestionProjectId] = useState<string | null>(() => {
+    return localStorage.getItem('gitsense_ingestion_project_id');
+  });
   
   const [sessionError, setSessionError] = useState<string | null>(null);
   const [isInitialized, setIsInitialized] = useState(false);
@@ -232,9 +236,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setCurrentProject(null);
     setFileTree([]);
     setChatHistory([]);
+    localStorage.removeItem('gitsense_ingestion_project_id');
+    localStorage.removeItem('gitsense_is_ingesting');
     setIngestionProjectId(null);
     setIsIngesting(false);
 
+    isInitializationStarted = false; // Reset lock to allow re-initialization
     await initializeSession();
     toast.success('Started a new clean session.');
   }, [initializeSession]);
@@ -257,6 +264,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [currentProject, refreshProjects]);
 
   const setIngestionState = useCallback((projId: string | null, ingesting: boolean) => {
+    if (projId && ingesting) {
+      localStorage.setItem('gitsense_ingestion_project_id', projId);
+      localStorage.setItem('gitsense_is_ingesting', 'true');
+    } else {
+      localStorage.removeItem('gitsense_ingestion_project_id');
+      localStorage.removeItem('gitsense_is_ingesting');
+    }
     setIngestionProjectId(projId);
     setIsIngesting(ingesting);
   }, []);
