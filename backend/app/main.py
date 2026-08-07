@@ -118,7 +118,7 @@ app.add_middleware(
         "http://localhost:5173",
         "http://127.0.0.1:3000",
         "http://127.0.0.1:5173",
-        "https://gitsenseai.onrender.com"
+        "https://git-sense-ai.vercel.app"
     ],
     allow_origin_regex=r"https?://.*",
     allow_credentials=True,
