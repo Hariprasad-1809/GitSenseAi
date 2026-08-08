@@ -1,53 +1,64 @@
 # Sensitive configuration files
 .env
-.env.local
-.env.development
-.env.production
+.env.*
 backend/.env
 frontend/.env
 
-# Unignore sample/example env files so they are tracked by Git
+# Unignore sample/example env files
 !.env.example
 !*.env.example
-!.env.sample
-!*.env.sample
 !sample.env
 
-# User-requested exclusions
+# Debug & internal development reports
+AI_PERFORMANCE_IMPROVEMENTS.md
+EMBEDDING_DEPLOYMENT_OPTIMIZATION.md
+FRONTEND_DEBUG_REPORT.md
+INDEXING_FLOW_REPORT.md
+INGESTION_CONCURRENCY_FIX.md
+PERFORMANCE_OPTIMIZATION_REPORT.md
+RELOAD_FIX_REPORT.md
+SESSION_AND_DELETE_LIFECYCLE_FIX.md
+SESSION_LIFECYCLE_FIX_REPORT.md
+TEMPORARY_STORAGE_ARCHITECTURE.md
+UI_SYNC_FIX_REPORT.md
+DOCUMENTATION_AUDIT.md
+backend/api_details.md
 explanation.txt
 
-# Package manager and build output
-node_modules/
-dist/
-dist-ssr/
-*.local
-
-# Python files
+# Local Python files & virtual environments
 __pycache__/
-*.pyc
+*.py[cod]
 *.pyo
 *.pyd
-.Python
-env/
-venv/
 .venv/
-pip-log.txt
-pip-delete-this-directory.txt
-.tox/
-.coverage
-.cache
-nosetests.xml
-coverage.xml
-htmlcov/
-*.coveragerc
-.ipynb_checkpoints/
+venv/
+env/
 
-# Temporary and local data files
+# Local development & test artifacts
+scratch/
+tests/__pycache__/
+.pytest_cache/
+.mypy_cache/
+
+# Backend temporary & generated data
 data/
 backend/data/
 backend/scratch/
+backend/uploads/
+backend/repos/
 backend/package-lock.json
+backend/package.json
 
-# OS files
+# Frontend dependencies & build outputs
+node_modules/
+frontend/node_modules/
+dist/
+frontend/dist/
+frontend/.vite/
+dist-ssr/
+
+# Editor & OS files
+.vscode/
+.idea/
 .DS_Store
 Thumbs.db
