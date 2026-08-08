@@ -3,7 +3,7 @@
 GitSense AI is an enterprise-grade, high-performance **Retrieval-Augmented Generation (RAG)** platform designed specifically for deep codebase comprehension, interactive Q&A, and technical architecture analysis. It ingests public GitHub repositories or uploaded ZIP archives, parses syntax structures using **Tree-sitter AST nodes**, computes dense **1536-dimensional vector embeddings**, stores vectors in **PostgreSQL + pgvector (Supabase)**, and synthesizes cited answers using **OpenRouter LLMs**.
 
 ---
-
+Live Link: https://git-sense-ai.vercel.app
 ## Table of Contents
 
 - [Problem Statement](#problem-statement)
