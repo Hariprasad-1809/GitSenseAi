@@ -1,9 +1,17 @@
 # Sensitive configuration files
 .env
 .env.local
-.env.*
+.env.development
+.env.production
 backend/.env
 frontend/.env
+
+# Unignore sample/example env files so they are tracked by Git
+!.env.example
+!*.env.example
+!.env.sample
+!*.env.sample
+!sample.env
 
 # User-requested exclusions
 explanation.txt
