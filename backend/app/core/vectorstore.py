@@ -193,10 +193,29 @@ async def get_project_status(project_id: UUID) -> Optional[Dict[str, Any]]:
             if not row:
                 return None
                 
+            status_val = row.get("status")
             total = row.get("total_files", 0) or 0
             processed = row.get("files_processed", 0) or 0
-            pct = round((processed / total) * 100.0, 1) if total > 0 else 0.0
-            row["percentage"] = pct
+            
+            if status_val == "completed":
+                pct = 100.0
+            elif status_val == "queued":
+                pct = 0.0
+            elif status_val == "cloning":
+                pct = 10.0
+            elif status_val == "parsing":
+                progress_ratio = (processed / max(1, total))
+                pct = round(15.0 + (progress_ratio * 45.0), 1)
+            elif status_val == "generating embeddings":
+                pct = 75.0
+            elif status_val == "saving":
+                pct = 95.0
+            elif status_val == "failed":
+                pct = 0.0
+            else:
+                pct = round((processed / max(1, total)) * 100.0, 1) if total > 0 else 0.0
+                
+            row["percentage"] = min(99.0, pct) if status_val != "completed" else 100.0
             return row
 
 

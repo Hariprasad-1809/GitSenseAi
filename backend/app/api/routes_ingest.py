@@ -142,14 +142,24 @@ async def ingest_github(
             detail="Unsupported repository host. Only public GitHub HTTPS repositories are supported."
         )
 
-    # Clean up any existing repository for this session to allow seamless new ingestion
+    # Check for active ingestion in progress for this session to prevent duplicate jobs
     existing_projects = await list_projects(session_id)
     for old_proj in existing_projects:
         old_id = old_proj["project_id"]
-        logger.info(f"Automatically replacing existing project {old_id} for session {session_id}...")
+        old_status = old_proj.get("status")
+        # If an ingestion job is currently active for this project, return the existing project_id immediately
+        if old_status in ("queued", "cloning", "parsing", "generating embeddings", "saving", "processing"):
+            logger.info(f"Ingestion job already active for project {old_id} (status={old_status}). Preventing duplicate task.")
+            return {
+                "project_id": str(old_id),
+                "status": old_status,
+                "message": "Ingestion job is already active and running in the background."
+            }
+        # Otherwise, replace the completed/failed project
+        logger.info(f"Replacing old project {old_id} (status={old_status}) for session {session_id}...")
         try:
             await delete_project(old_id)
-            await run_in_threadpool(cleanup_project_files, str(old_id))
+            asyncio.create_task(run_in_threadpool(cleanup_project_files, str(old_id)))
         except Exception as cleanup_err:
             logger.warning(f"Error cleaning up old project {old_id}: {cleanup_err}")
 
