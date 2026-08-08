@@ -52,8 +52,8 @@ export const apiService = {
     return response.data;
   },
 
-  async getIngestionStatus(projectId: string): Promise<IngestStatusResponse> {
-    const response = await apiClient.get<IngestStatusResponse>(`/api/ingest/status/${projectId}`);
+  async getIngestionStatus(projectId: string, signal?: AbortSignal): Promise<IngestStatusResponse> {
+    const response = await apiClient.get<IngestStatusResponse>(`/api/ingest/status/${projectId}`, { signal });
     return response.data;
   },
 

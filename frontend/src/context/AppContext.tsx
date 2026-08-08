@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef, ReactNode } from 'react';
 import { apiService } from '../services/api';
 import { ProjectMetadata, SessionResponse, FileEntry, ChatHistoryEntry } from '../types';
 import { toast } from 'sonner';
@@ -25,6 +25,15 @@ interface AppContextType {
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
+// Centralized helper to clear all GitSense session-scoped localStorage items
+export const clearSessionState = () => {
+  localStorage.removeItem('gitsense_session_id');
+  localStorage.removeItem('gitsense_session_expires_at');
+  localStorage.removeItem('gitsense_ingestion_project_id');
+  localStorage.removeItem('gitsense_is_ingesting');
+  localStorage.removeItem('gitsense_current_project_id');
+};
+
 // Shared promise to deduplicate parallel createSession calls
 let activeSessionCreationPromise: Promise<SessionResponse> | null = null;
 let isInitializationStarted = false;
@@ -35,7 +44,20 @@ const logWithTimestamp = (msg: string) => {
 };
 
 export function AppProvider({ children }: { children: ReactNode }) {
+  const sessionGenRef = useRef<number>(0);
+
   const [sessionId, setSessionId] = useState<string | null>(() => {
+    // Requirements 1, 12, 13: Cold load or browser refresh on /chat MUST start a new session
+    const isChatRoute = window.location.pathname === '/chat';
+    if (isChatRoute) {
+      logWithTimestamp('Cold load / refresh detected on /chat. Wiping stale session and initializing new session.');
+      clearSessionState();
+      if (window.location.pathname !== '/') {
+        window.history.replaceState(null, '', '/');
+      }
+      return null;
+    }
+
     const storedId = localStorage.getItem('gitsense_session_id');
     const expiresAtStr = localStorage.getItem('gitsense_session_expires_at');
     if (storedId && expiresAtStr) {
@@ -44,6 +66,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
     return null;
   });
+
   const [projects, setProjects] = useState<ProjectMetadata[]>([]);
   const [currentProject, setCurrentProject] = useState<ProjectMetadata | null>(null);
   const [fileTree, setFileTree] = useState<FileEntry[]>([]);
@@ -52,25 +75,31 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [isLoadingProjects, setIsLoadingProjects] = useState(false);
   const [isLoadingFiles, setIsLoadingFiles] = useState(false);
   const [isLoadingChat, setIsLoadingChat] = useState(false);
+  
   const [isIngesting, setIsIngesting] = useState<boolean>(() => {
+    if (window.location.pathname === '/chat') return false;
     return localStorage.getItem('gitsense_is_ingesting') === 'true';
   });
+  
   const [ingestionProjectId, setIngestionProjectId] = useState<string | null>(() => {
+    if (window.location.pathname === '/chat') return null;
     return localStorage.getItem('gitsense_ingestion_project_id');
   });
   
   const [sessionError, setSessionError] = useState<string | null>(null);
   const [isInitialized, setIsInitialized] = useState(false);
 
-  // Initialize or restore session
+  // Initialize or create a clean session
   const initializeSession = useCallback(async () => {
     if (isInitializationStarted) {
       logWithTimestamp('Session initialization already in progress, skipping duplicate call');
       return;
     }
     isInitializationStarted = true;
+    sessionGenRef.current += 1;
+    const currentGen = sessionGenRef.current;
     
-    logWithTimestamp('Initializing session');
+    logWithTimestamp(`Initializing session (Gen #${currentGen})`);
     setSessionError(null);
     setIsInitialized(false);
     
@@ -85,7 +114,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         return await fn();
       } catch (err: any) {
         if (retries <= 1) throw err;
-        if (err.response?.status === 410) throw err; // Don't retry if session is explicitly expired
+        if (err.response?.status === 410) throw err;
         
         console.warn(`[${new Date().toISOString()}] API call failed. Retrying in ${delay}ms... (${retries - 1} attempts left). Error:`, err.message || err);
         await new Promise(resolve => setTimeout(resolve, delay));
@@ -101,25 +130,20 @@ export function AppProvider({ children }: { children: ReactNode }) {
       // If session is expired or not found
       if (!storedId || isExpired) {
         if (isExpired && storedId) {
-          logWithTimestamp('Session expired');
-          logWithTimestamp('Removing expired session');
-          localStorage.removeItem('gitsense_session_id');
-          localStorage.removeItem('gitsense_session_expires_at');
+          logWithTimestamp('Session expired. Removing stored session.');
+          clearSessionState();
         }
         
-        logWithTimestamp('Creating new session');
-        logWithTimestamp('Session request sent');
-        
+        logWithTimestamp('Creating new session...');
         if (!activeSessionCreationPromise) {
           activeSessionCreationPromise = callWithRetry(() => apiService.createSession());
         }
         const newSession = await activeSessionCreationPromise;
         
-        logWithTimestamp('Session response received');
+        if (currentGen !== sessionGenRef.current) return;
         
         localStorage.setItem('gitsense_session_id', newSession.session_id);
         localStorage.setItem('gitsense_session_expires_at', newSession.expires_at);
-        logWithTimestamp('Session stored');
         logWithTimestamp(`Session created successfully: ${newSession.session_id}`);
         
         storedId = newSession.session_id;
@@ -128,39 +152,35 @@ export function AppProvider({ children }: { children: ReactNode }) {
         setSessionId(storedId);
       }
       
-      logWithTimestamp('API client configured');
-      
-      // Load projects/workspaces
+      // Load projects for active session
       logWithTimestamp('Workspace loading started');
       try {
         const list = await callWithRetry(() => apiService.listProjects());
+        if (currentGen !== sessionGenRef.current) return;
+
         setProjects(list);
         logWithTimestamp('Workspace loading completed');
         
-        sessionRecoveryAttempts = 0; // Reset recovery counter on success
+        sessionRecoveryAttempts = 0;
         setIsInitialized(true);
       } catch (err: any) {
-        // Handle server-side session expiration dynamically
         if (err.response?.status === 410) {
-          logWithTimestamp('Session expired');
+          logWithTimestamp('Session expired (410 Gone). Resetting session.');
           if (sessionRecoveryAttempts >= 2) {
             throw new Error('Session has repeatedly expired on server. Check database status.');
           }
           sessionRecoveryAttempts++;
-          logWithTimestamp('Removing expired session');
-          localStorage.removeItem('gitsense_session_id');
-          localStorage.removeItem('gitsense_session_expires_at');
+          clearSessionState();
           setSessionId(null);
           
-          logWithTimestamp('Automatically requesting a new session');
-          isInitializationStarted = false; // Allow re-entry
+          isInitializationStarted = false;
           return initializeSession();
         } else {
           throw err;
         }
       }
     } catch (error: any) {
-      isInitializationStarted = false; // Allow retry on failure
+      isInitializationStarted = false;
       console.error(`[${new Date().toISOString()}] Failed to initialize session after all retries:`, error);
       const message = error.response?.data?.detail || error.message || 'Could not connect to backend server.';
       setSessionError(message);
@@ -172,22 +192,25 @@ export function AppProvider({ children }: { children: ReactNode }) {
   // Fetch session projects
   const refreshProjects = useCallback(async () => {
     if (!sessionId) return;
+    const currentGen = sessionGenRef.current;
     setIsLoadingProjects(true);
     try {
       const list = await apiService.listProjects();
+      if (currentGen !== sessionGenRef.current) return;
       setProjects(list);
     } catch (error: any) {
       if (error.response?.status === 410) {
         console.warn('Session expired (410 Gone). Resetting session.');
-        localStorage.removeItem('gitsense_session_id');
-        localStorage.removeItem('gitsense_session_expires_at');
+        clearSessionState();
         setSessionId(null);
         setProjects([]);
         setCurrentProject(null);
         setFileTree([]);
         setChatHistory([]);
+        setIngestionProjectId(null);
+        setIsIngesting(false);
         
-        isInitializationStarted = false; // Reset lock to allow re-initialization
+        isInitializationStarted = false;
         await initializeSession();
       } else {
         console.error('Failed to fetch projects:', error);
@@ -199,6 +222,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   // Handle active project selection
   const selectProject = useCallback(async (project: ProjectMetadata | null) => {
+    const currentGen = sessionGenRef.current;
     setCurrentProject(project);
     if (!project) {
       setFileTree([]);
@@ -214,6 +238,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         apiService.getProjectFiles(project.project_id),
         apiService.getChatHistory(project.project_id),
       ]);
+      if (currentGen !== sessionGenRef.current) return;
       setFileTree(filesData.files);
       setChatHistory(chatData);
     } catch (error) {
@@ -229,39 +254,49 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   // Reset session manually
   const startNewSession = useCallback(async () => {
-    localStorage.removeItem('gitsense_session_id');
-    localStorage.removeItem('gitsense_session_expires_at');
+    sessionGenRef.current += 1;
+    clearSessionState();
     setSessionId(null);
     setProjects([]);
     setCurrentProject(null);
     setFileTree([]);
     setChatHistory([]);
-    localStorage.removeItem('gitsense_ingestion_project_id');
-    localStorage.removeItem('gitsense_is_ingesting');
     setIngestionProjectId(null);
     setIsIngesting(false);
 
-    isInitializationStarted = false; // Reset lock to allow re-initialization
+    isInitializationStarted = false;
     await initializeSession();
     toast.success('Started a new clean session.');
   }, [initializeSession]);
 
-  // Delete project
+  // Delete project with ingestion state cleanup
   const deleteProject = useCallback(async (projectId: string) => {
+    const currentGen = sessionGenRef.current;
     try {
-      await apiService.deleteProject(projectId);
-      toast.success('Project deleted successfully.');
+      // Requirements 4 & 6: Immediate ingestion cleanup if deleted project is active
+      if (ingestionProjectId === projectId) {
+        logWithTimestamp(`Project ${projectId} deleted while active. Cleaning ingestion state.`);
+        localStorage.removeItem('gitsense_ingestion_project_id');
+        localStorage.removeItem('gitsense_is_ingesting');
+        setIngestionProjectId(null);
+        setIsIngesting(false);
+      }
+
       if (currentProject?.project_id === projectId) {
         setCurrentProject(null);
         setFileTree([]);
         setChatHistory([]);
       }
+
+      await apiService.deleteProject(projectId);
+      if (currentGen !== sessionGenRef.current) return;
+      toast.success('Project deleted successfully.');
       await refreshProjects();
     } catch (error) {
       console.error('Failed to delete project:', error);
       toast.error('Failed to delete the project.');
     }
-  }, [currentProject, refreshProjects]);
+  }, [currentProject, ingestionProjectId, refreshProjects]);
 
   const setIngestionState = useCallback((projId: string | null, ingesting: boolean) => {
     if (projId && ingesting) {
@@ -276,7 +311,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
-    console.log('App started');
     initializeSession();
   }, [initializeSession]);
 
@@ -288,7 +322,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
             <span className="font-bold text-red-500 text-sm uppercase tracking-wider block mb-2">// SESSION_INIT_ERROR</span>
             <p className="text-xs text-zinc-400 leading-relaxed mb-6">{sessionError}</p>
             <button
-              onClick={initializeSession}
+              onClick={() => {
+                isInitializationStarted = false;
+                initializeSession();
+              }}
               className="w-full bg-red-900/20 hover:bg-red-900/40 border border-red-500/30 text-red-400 hover:text-red-300 py-2.5 text-xs font-bold uppercase tracking-widest cursor-pointer transition-all focus:outline-none"
             >
               Retry Connection

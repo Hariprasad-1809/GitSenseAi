@@ -1,4 +1,6 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
+import axios from 'axios';
 import { useApp } from '../context/AppContext';
 import { apiService } from '../services/api';
 import { MarkdownRenderer } from '../components/ui/MarkdownRenderer';
@@ -27,6 +29,7 @@ import { SourceCitation } from '../types';
 
 export function ChatPage() {
   const {
+    sessionId,
     projects,
     currentProject,
     fileTree,
@@ -43,6 +46,15 @@ export function ChatPage() {
     setChatHistory,
     sessionError
   } = useApp();
+
+  const navigate = useNavigate();
+
+  // Requirement 12: Redirect to / if session is missing or reset
+  useEffect(() => {
+    if (!sessionId) {
+      navigate('/');
+    }
+  }, [sessionId, navigate]);
 
   const [githubUrl, setGithubUrl] = useState('');
   const [isSubmittingGithub, setIsSubmittingGithub] = useState(false);
@@ -62,7 +74,26 @@ export function ChatPage() {
   const [selectedCitation, setSelectedCitation] = useState<SourceCitation | null>(null);
 
   const chatBottomRef = useRef<HTMLDivElement>(null);
-  const hasShownCompletionToastRef = useRef<boolean>(false);
+  
+  // Requirement 4 & 8: Dedicated poller refs to enforce EXACTLY ONE active polling loop
+  const pollingIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pollingAbortControllerRef = useRef<AbortController | null>(null);
+  const activePollingProjectIdRef = useRef<string | null>(null);
+  
+  // Requirement 9: Completion handler single execution guard
+  const completionHandledRef = useRef<string | null>(null);
+
+  const stopPolling = useCallback(() => {
+    if (pollingIntervalRef.current) {
+      clearInterval(pollingIntervalRef.current);
+      pollingIntervalRef.current = null;
+    }
+    if (pollingAbortControllerRef.current) {
+      pollingAbortControllerRef.current.abort();
+      pollingAbortControllerRef.current = null;
+    }
+    activePollingProjectIdRef.current = null;
+  }, []);
 
   useEffect(() => {
     chatBottomRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -99,87 +130,117 @@ export function ChatPage() {
   };
 
   useEffect(() => {
-    let intervalId: any;
-
-    if (isIngesting && ingestionProjectId) {
-      const checkStatus = async () => {
-        try {
-          const statusRes = await apiService.getIngestionStatus(ingestionProjectId);
-          const computedPct = calculateStageProgress(statusRes.status, statusRes.files_processed, statusRes.total_files);
-
-          console.log(`[INGESTION_STATUS_POLL] project_id: ${ingestionProjectId}, status: ${statusRes.status}, files_processed: ${statusRes.files_processed}, total_files: ${statusRes.total_files}, progress: ${computedPct}%`);
-
-          setPollingStatus(prev => (prev !== statusRes.status ? statusRes.status : prev));
-          setFilesProcessed(prev => (prev !== statusRes.files_processed ? statusRes.files_processed : prev));
-          setTotalFiles(prev => (prev !== statusRes.total_files ? statusRes.total_files : prev));
-          setPercentage(prev => (prev !== computedPct ? computedPct : prev));
-          setIngestionError(prev => (prev !== statusRes.error ? statusRes.error : prev));
-
-          if (statusRes.status !== 'failed') {
-            setLastActiveStatus(prev => (prev !== statusRes.status ? statusRes.status : prev));
-          }
-
-          if (statusRes.status === 'completed') {
-            // Destroy polling interval immediately
-            if (intervalId) clearInterval(intervalId);
-
-            // Trigger success toast ONCE
-            if (!hasShownCompletionToastRef.current) {
-              hasShownCompletionToastRef.current = true;
-              toast.success('Indexing completed successfully!');
-            }
-
-            console.log(`[INGESTION_COMPLETED] project_id: ${ingestionProjectId} achieved completed state. Stopping polling and switching to chat.`);
-
-            setPercentage(100);
-            setPollingStatus('completed');
-            setLastActiveStatus('completed');
-
-            await refreshProjects();
-
-            const list = await apiService.listProjects();
-            let targetProj = list.find(p => p.project_id === ingestionProjectId);
-            if (!targetProj) {
-              targetProj = {
-                project_id: ingestionProjectId,
-                project_name: 'Ingested Codebase',
-                language_summary: {},
-                file_count: statusRes.total_files || statusRes.files_processed,
-                ingestion_date: new Date().toISOString(),
-                status: 'completed'
-              };
-            }
-
-            await selectProject(targetProj);
-
-            // Clear ingestion mode to automatically transition to Chat screen
-            setIngestionState(null, false);
-          } else if (statusRes.status === 'failed') {
-            console.error(`[INGESTION_FAILED] project_id: ${ingestionProjectId}, error: ${statusRes.error}`);
-            if (intervalId) clearInterval(intervalId);
-            toast.error(`Indexing failed: ${statusRes.error || 'Unknown error'}`);
-            await refreshProjects();
-          }
-        } catch (error) {
-          console.error('[INGESTION_STATUS_ERROR] Error polling status for project:', ingestionProjectId, error);
-        }
-      };
-
-      checkStatus();
-      intervalId = setInterval(checkStatus, 1500);
+    // Requirements 4 & 11: Stop polling immediately if not ingesting or no project ID
+    if (!isIngesting || !ingestionProjectId) {
+      stopPolling();
+      return;
     }
 
-    return () => {
-      if (intervalId) clearInterval(intervalId);
+    // Requirement 8: Prevent duplicate polling loop for the same project
+    if (activePollingProjectIdRef.current === ingestionProjectId && pollingIntervalRef.current !== null) {
+      return;
+    }
+
+    stopPolling();
+    activePollingProjectIdRef.current = ingestionProjectId;
+
+    const checkStatus = async () => {
+      if (!ingestionProjectId || activePollingProjectIdRef.current !== ingestionProjectId) return;
+
+      const controller = new AbortController();
+      pollingAbortControllerRef.current = controller;
+
+      try {
+        const statusRes = await apiService.getIngestionStatus(ingestionProjectId, controller.signal);
+
+        // If poller was stopped or target project changed while HTTP call was in-flight
+        if (activePollingProjectIdRef.current !== ingestionProjectId) return;
+
+        const computedPct = calculateStageProgress(statusRes.status, statusRes.files_processed, statusRes.total_files);
+
+        setPollingStatus(statusRes.status);
+        setFilesProcessed(statusRes.files_processed);
+        setTotalFiles(statusRes.total_files);
+        setPercentage(computedPct);
+        setIngestionError(statusRes.error || null);
+
+        if (statusRes.status !== 'failed') {
+          setLastActiveStatus(statusRes.status);
+        }
+
+        // Requirement 9: Completion handler executes EXACTLY ONCE per project
+        if (statusRes.status === 'completed') {
+          if (completionHandledRef.current === ingestionProjectId) {
+            stopPolling();
+            return;
+          }
+          completionHandledRef.current = ingestionProjectId;
+
+          stopPolling();
+          setPercentage(100);
+          setPollingStatus('completed');
+          setLastActiveStatus('completed');
+
+          toast.success('Indexing completed successfully!');
+
+          await refreshProjects();
+
+          const list = await apiService.listProjects();
+          let targetProj = list.find(p => p.project_id === ingestionProjectId);
+          if (!targetProj) {
+            targetProj = {
+              project_id: ingestionProjectId,
+              project_name: 'Ingested Codebase',
+              language_summary: {},
+              file_count: statusRes.total_files || statusRes.files_processed,
+              ingestion_date: new Date().toISOString(),
+              status: 'completed'
+            };
+          }
+
+          await selectProject(targetProj);
+          setIngestionState(null, false);
+
+        } else if (statusRes.status === 'failed') {
+          stopPolling();
+          console.error(`[INGESTION_FAILED] project_id: ${ingestionProjectId}, error: ${statusRes.error}`);
+          toast.error(`Indexing failed: ${statusRes.error || 'Unknown error'}`);
+          setIngestionState(null, false);
+          await refreshProjects();
+        }
+      } catch (error: any) {
+        if (axios.isCancel(error) || error.name === 'CanceledError' || error.name === 'AbortError') return;
+
+        // REQUIREMENT 5: 404 MUST STOP POLLING IMMEDIATELY
+        if (error.response?.status === 404) {
+          console.warn(`[INGESTION_404] Ingestion project ${ingestionProjectId} no longer exists. Stopping polling immediately.`);
+          stopPolling();
+          setIngestionState(null, false);
+          setPollingStatus('failed');
+          setPercentage(0);
+          setIngestionError(null);
+          await refreshProjects();
+          return;
+        }
+
+        console.error('[INGESTION_STATUS_ERROR] Error polling status for project:', ingestionProjectId, error);
+      }
     };
-  }, [isIngesting, ingestionProjectId, refreshProjects, selectProject, setIngestionState]);
+
+    checkStatus();
+    pollingIntervalRef.current = setInterval(checkStatus, 1500);
+
+    return () => {
+      stopPolling();
+    };
+  }, [isIngesting, ingestionProjectId, refreshProjects, selectProject, setIngestionState, stopPolling]);
 
   const handleGithubSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!githubUrl.trim()) return;
 
     setIsSubmittingGithub(true);
-    hasShownCompletionToastRef.current = false;
+    completionHandledRef.current = null;
     try {
       const res = await apiService.ingestGithub({ repo_url: githubUrl.trim() });
       toast.success(res.message);
@@ -210,7 +271,7 @@ export function ChatPage() {
     if (!selectedZip) return;
 
     setIsSubmittingZip(true);
-    hasShownCompletionToastRef.current = false;
+    completionHandledRef.current = null;
     try {
       const res = await apiService.ingestZip(selectedZip);
       toast.success(res.message);
