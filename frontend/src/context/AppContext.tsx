@@ -3,6 +3,8 @@ import { apiService } from '../services/api';
 import { ProjectMetadata, SessionResponse, FileEntry, ChatHistoryEntry } from '../types';
 import { toast } from 'sonner';
 
+import { clearSessionState } from '../utils/session';
+
 interface AppContextType {
   sessionId: string | null;
   projects: ProjectMetadata[];
@@ -25,14 +27,7 @@ interface AppContextType {
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
-// Centralized helper to clear all GitSense session-scoped localStorage items
-export const clearSessionState = () => {
-  localStorage.removeItem('gitsense_session_id');
-  localStorage.removeItem('gitsense_session_expires_at');
-  localStorage.removeItem('gitsense_ingestion_project_id');
-  localStorage.removeItem('gitsense_is_ingesting');
-  localStorage.removeItem('gitsense_current_project_id');
-};
+export { clearSessionState };
 
 // Shared promise to deduplicate parallel createSession calls
 let activeSessionCreationPromise: Promise<SessionResponse> | null = null;
