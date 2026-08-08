@@ -355,7 +355,7 @@ async def hybrid_search(project_id: UUID, query_vector: List[float], query_text:
                 (query_vector, project_id, query_vector)
             )
             all_semantic = await cur.fetchall()
-            semantic_results = [r for r in all_semantic if r.get("similarity", 0.0) >= 0.25]
+            semantic_results = [r for r in all_semantic if r.get("similarity", 0.0) >= 0.05]
 
             # 2. Keyword search (fetch 20 candidates) using websearch_to_tsquery
             await cur.execute(

@@ -28,6 +28,12 @@ class Settings(BaseSettings):
         "openai/gpt-oss-20b:free"
     ]
 
+    # Embedding API Config (Lightweight Low-Memory API Embeddings)
+    OPENAI_API_KEY: str = ""
+    EMBEDDING_MODEL: str = "text-embedding-3-small"
+    EMBEDDING_DIMENSION: int = 1536
+    EMBEDDING_BASE_URL: str = ""
+
     # Supabase / DB Config
     SUPABASE_URL: str
     SUPABASE_ANON_KEY: str

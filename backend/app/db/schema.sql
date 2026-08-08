@@ -39,7 +39,7 @@ CREATE TABLE IF NOT EXISTS files (
     UNIQUE (project_id, file_path)
 );
 
--- Chunks Table with Vector Embedding (bge-small-en-v1.5 has 384 dimensions)
+-- Chunks Table with Vector Embedding (text-embedding-3-small has 1536 dimensions)
 CREATE TABLE IF NOT EXISTS chunks (
     id SERIAL PRIMARY KEY,
     project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -51,7 +51,7 @@ CREATE TABLE IF NOT EXISTS chunks (
     start_line INTEGER NOT NULL,
     end_line INTEGER NOT NULL,
     content TEXT NOT NULL,
-    embedding VECTOR(384),
+    embedding VECTOR(1536),
     chunking_method TEXT NOT NULL, -- ast, md, fallback
     metadata JSONB DEFAULT '{}'::jsonb,
     fts_vector TSVECTOR GENERATED ALWAYS AS (to_tsvector('english', content)) STORED

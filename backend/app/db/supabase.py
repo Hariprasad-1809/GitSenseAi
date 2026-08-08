@@ -203,6 +203,15 @@ async def init_db(schema_path: str = "app/db/schema.sql") -> None:
                 await cur.execute("ALTER TABLE chunks ADD COLUMN IF NOT EXISTS metadata JSONB DEFAULT '{}'::jsonb;")
                 await cur.execute("ALTER TABLE files ADD COLUMN IF NOT EXISTS file_hash VARCHAR(64);")
                 await cur.execute("ALTER TABLE files ADD COLUMN IF NOT EXISTS size_bytes BIGINT DEFAULT 0;")
+                
+                # Migrate chunks embedding column to VECTOR(1536) if upgrading from 384 dimensions
+                try:
+                    await cur.execute("ALTER TABLE chunks ALTER COLUMN embedding TYPE VECTOR(1536);")
+                except Exception:
+                    logger.info("Re-indexing chunks table for vector dimension 1536...")
+                    await cur.execute("DROP INDEX IF EXISTS chunks_embedding_idx;")
+                    await cur.execute("ALTER TABLE chunks ALTER COLUMN embedding TYPE VECTOR(1536);")
+                    await cur.execute("CREATE INDEX IF NOT EXISTS chunks_embedding_idx ON chunks USING hnsw (embedding vector_cosine_ops);")
         logger.info("Database schema initialized successfully.")
     except Exception as e:
         logger.exception("Failed to initialize database schema")

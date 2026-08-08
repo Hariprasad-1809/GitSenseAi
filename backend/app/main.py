@@ -72,11 +72,11 @@ async def lifespan(app: FastAPI):
         logger.info("Session timeout: %d hours", settings.SESSION_TIMEOUT_HOURS)
         logger.info("Cleanup interval: %d minutes", settings.CLEANUP_INTERVAL_MINUTES)
 
-        # Pre-load embedding model in worker thread during startup to prevent first-request freezing
+        # Pre-load API embedding client instance during startup
         from app.core.embedder import get_embedder
-        logger.info("Pre-loading local SentenceTransformer embedding model during startup...")
-        await asyncio.to_thread(get_embedder)
-        logger.info("Embedding model pre-loaded successfully.")
+        logger.info("Initializing API CodeEmbedder client during startup...")
+        get_embedder()
+        logger.info("API CodeEmbedder client initialized successfully.")
 
         app_dir = Path("app").resolve()
         data_dir = Path("data").resolve()
