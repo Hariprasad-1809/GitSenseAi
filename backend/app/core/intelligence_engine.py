@@ -155,6 +155,44 @@ async def generate_workflow_summary(project_id: uuid.UUID, project_name: str, re
         return f"# Workflow Summary: {project_name}\n\nExecution flow starts at entry points: {repo_map.get('entry_points', [])}."
 
 
+# Task Registry for managing and invalidating active Phase 2 background worker tasks
+_ACTIVE_PHASE2_TASKS: Dict[uuid.UUID, asyncio.Task] = {}
+_CANCELLED_PROJECT_IDS: set[uuid.UUID] = set()
+
+
+def register_phase2_task(project_id: uuid.UUID, task: asyncio.Task) -> None:
+    """Registers an active Phase 2 worker task for a project ID."""
+    _CANCELLED_PROJECT_IDS.discard(project_id)
+    _ACTIVE_PHASE2_TASKS[project_id] = task
+
+
+def unregister_phase2_task(project_id: uuid.UUID) -> None:
+    """Removes a finished task from the registry."""
+    _ACTIVE_PHASE2_TASKS.pop(project_id, None)
+
+
+def cancel_phase2_task(project_id: uuid.UUID) -> None:
+    """
+    Cancels an active Phase 2 worker task immediately and marks project_id as cancelled.
+    Prevents stale background workers from operating on deleted projects.
+    """
+    _CANCELLED_PROJECT_IDS.add(project_id)
+    task = _ACTIVE_PHASE2_TASKS.pop(project_id, None)
+    if task and not task.done():
+        logger.info(f"[PHASE 2 WORKER] Cancelling in-flight background worker task for project {project_id}.")
+        task.cancel()
+
+
+async def is_project_active_and_valid(project_id: uuid.UUID) -> bool:
+    """
+    Checks if a project is still active (not cancelled and exists in DB).
+    """
+    if project_id in _CANCELLED_PROJECT_IDS:
+        return False
+    from app.core.vectorstore import project_exists
+    return await project_exists(project_id)
+
+
 async def run_background_intelligence_worker(project_id: uuid.UUID, project_name: str, repo_path: Path) -> None:
     """
     Phase 2 Asynchronous Worker Task.
@@ -164,6 +202,11 @@ async def run_background_intelligence_worker(project_id: uuid.UUID, project_name
     NEVER delays indexing completion or blocks the user.
     """
     logger.info(f"[PHASE 2 WORKER] Starting background intelligence generation for project '{project_name}' ({project_id})...")
+    
+    if not await is_project_active_and_valid(project_id):
+        logger.info(f"[PHASE 2 WORKER] Project {project_id} no longer exists. Skipping Phase 2 intelligence processing.")
+        return
+
     try:
         # Build lightweight repo map
         repo_map = await asyncio.to_thread(build_lightweight_repo_map, repo_path)
@@ -191,27 +234,53 @@ async def run_background_intelligence_worker(project_id: uuid.UUID, project_name
         context_samples = "\n\n".join(sample_texts) if sample_texts else "No sample text files found."
 
         # 1. Generate & Cache Repository Summary
+        if not await is_project_active_and_valid(project_id):
+            logger.info(f"[PHASE 2 WORKER] Project {project_id} no longer exists. Skipping Phase 2 intelligence processing.")
+            return
         repo_summary = await generate_repository_summary(project_id, project_name, repo_map, context_samples)
+        
+        if not await is_project_active_and_valid(project_id):
+            logger.info(f"[PHASE 2 WORKER] Project {project_id} no longer exists. Skipping Phase 2 intelligence processing.")
+            return
         await save_cached_intelligence(project_id, "repo_summary", repo_summary, {"type": "repo_summary"})
         logger.info(f"[PHASE 2 WORKER] Cached 'repo_summary' for project {project_id}.")
 
         # 2. Generate & Cache Architecture Summary
+        if not await is_project_active_and_valid(project_id):
+            logger.info(f"[PHASE 2 WORKER] Project {project_id} no longer exists. Skipping Phase 2 intelligence processing.")
+            return
         arch_summary = await generate_architecture_summary(project_id, project_name, repo_map, context_samples)
+        
+        if not await is_project_active_and_valid(project_id):
+            logger.info(f"[PHASE 2 WORKER] Project {project_id} no longer exists. Skipping Phase 2 intelligence processing.")
+            return
         await save_cached_intelligence(project_id, "architecture_summary", arch_summary, {"type": "architecture_summary"})
         logger.info(f"[PHASE 2 WORKER] Cached 'architecture_summary' for project {project_id}.")
 
         # 3. Generate & Cache Workflow Summary
+        if not await is_project_active_and_valid(project_id):
+            logger.info(f"[PHASE 2 WORKER] Project {project_id} no longer exists. Skipping Phase 2 intelligence processing.")
+            return
         workflow_summary = await generate_workflow_summary(project_id, project_name, repo_map, context_samples)
+        
+        if not await is_project_active_and_valid(project_id):
+            logger.info(f"[PHASE 2 WORKER] Project {project_id} no longer exists. Skipping Phase 2 intelligence processing.")
+            return
         await save_cached_intelligence(project_id, "workflow_summary", workflow_summary, {"type": "workflow_summary"})
         logger.info(f"[PHASE 2 WORKER] Cached 'workflow_summary' for project {project_id}.")
 
         # 4. Store Repo Map as Tech Stack intelligence
-        await save_cached_intelligence(project_id, "tech_stack", json.dumps(repo_map), {"type": "repo_map"})
+        if await is_project_active_and_valid(project_id):
+            await save_cached_intelligence(project_id, "tech_stack", json.dumps(repo_map), {"type": "repo_map"})
+            logger.info(f"[PHASE 2 WORKER] Background intelligence worker completed successfully for project {project_id}.")
 
-        logger.info(f"[PHASE 2 WORKER] Background intelligence worker completed successfully for project {project_id}.")
-
+    except asyncio.CancelledError:
+        logger.info(f"[PHASE 2 WORKER] Background intelligence worker task cancelled for project {project_id} (project deleted).")
+        return
     except Exception as e:
         logger.error(f"[PHASE 2 WORKER] Background intelligence worker encountered an error for project {project_id}: {e}", exc_info=True)
+    finally:
+        unregister_phase2_task(project_id)
 
 
 async def get_or_generate_intelligence(

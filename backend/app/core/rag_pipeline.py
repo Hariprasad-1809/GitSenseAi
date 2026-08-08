@@ -136,8 +136,9 @@ async def run_indexing_pipeline(project_id: UUID, project_name: str, repo_path: 
 
         if not files_to_process:
             # All files are up to date!
-            from app.core.intelligence_engine import run_background_intelligence_worker
-            asyncio.create_task(run_background_intelligence_worker(project_id, project_name, repo_path))
+            from app.core.intelligence_engine import run_background_intelligence_worker, register_phase2_task
+            p2_task = asyncio.create_task(run_background_intelligence_worker(project_id, project_name, repo_path))
+            register_phase2_task(project_id, p2_task)
             await update_project_status(project_id, "completed", files_processed=total_discovered, total_files=total_discovered, current_file="")
             logger.info(f"[INGEST] Project marked completed: {project_id}")
             from app.core.extractor import cleanup_project_files
@@ -221,9 +222,10 @@ async def run_indexing_pipeline(project_id: UUID, project_name: str, repo_path: 
         logger.info(f"[INGEST] Project status set to completed (100%): {project_id}")
 
         # 6. Spawn Phase 2 Asynchronous Background Intelligence Worker (detached)
-        from app.core.intelligence_engine import run_background_intelligence_worker
+        from app.core.intelligence_engine import run_background_intelligence_worker, register_phase2_task
         logger.info(f"Spawning Phase 2 detached background worker task for project {project_id}...")
-        asyncio.create_task(run_background_intelligence_worker(project_id, project_name, repo_path))
+        p2_task = asyncio.create_task(run_background_intelligence_worker(project_id, project_name, repo_path))
+        register_phase2_task(project_id, p2_task)
 
         # 7. Delete temporary cloned repository folder in worker thread
         from app.core.extractor import cleanup_project_files

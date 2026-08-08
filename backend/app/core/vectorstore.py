@@ -263,11 +263,27 @@ async def list_projects(session_id: UUID) -> List[Dict[str, Any]]:
             return result
 
 
+async def project_exists(project_id: UUID) -> bool:
+    """
+    Checks if a project record currently exists in the database.
+    """
+    async with get_db_connection() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute("SELECT 1 FROM projects WHERE id = %s;", (project_id,))
+            return (await cur.fetchone()) is not None
+
+
 async def delete_project(project_id: UUID) -> bool:
     """
     Deletes a project record from the database. References are set to ON DELETE CASCADE
-    so this cleans up files, chunks, and chat history.
+    so this cleans up files, chunks, and chat history. Also cancels any running Phase 2 workers.
     """
+    try:
+        from app.core.intelligence_engine import cancel_phase2_task
+        cancel_phase2_task(project_id)
+    except Exception as e:
+        logger.warning(f"Error cancelling Phase 2 task for project {project_id}: {e}")
+
     async with get_db_connection() as conn:
         async with conn.cursor() as cur:
             await cur.execute("DELETE FROM projects WHERE id = %s;", (project_id,))

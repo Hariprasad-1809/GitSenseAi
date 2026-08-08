@@ -320,18 +320,36 @@ async def get_cached_intelligence(project_id: uuid.UUID, cache_key: str) -> Opti
 async def save_cached_intelligence(project_id: uuid.UUID, cache_key: str, content: str, metadata: Optional[dict] = None) -> None:
     """
     Saves or updates cached intelligence for a project.
+    Safely checks project existence first and handles foreign key deletion races gracefully.
     """
     import json
+    import psycopg.errors
+    from app.core.vectorstore import project_exists
+
+    # Pre-check project existence to avoid redundant database errors
+    if not await project_exists(project_id):
+        logger.info(f"[PHASE 2 WORKER] Project {project_id} no longer exists. Skipping Phase 2 intelligence saving for '{cache_key}'.")
+        return
+
     meta_json = json.dumps(metadata or {})
-    async with get_db_connection() as conn:
-        async with conn.cursor() as cur:
-            await cur.execute(
-                """
-                INSERT INTO intelligence_cache (project_id, cache_key, content, metadata)
-                VALUES (%s, %s, %s, %s::jsonb)
-                ON CONFLICT (project_id, cache_key)
-                DO UPDATE SET content = EXCLUDED.content, metadata = EXCLUDED.metadata, created_at = NOW();
-                """,
-                (project_id, cache_key, content, meta_json)
-            )
+    try:
+        async with get_db_connection() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    """
+                    INSERT INTO intelligence_cache (project_id, cache_key, content, metadata)
+                    VALUES (%s, %s, %s, %s::jsonb)
+                    ON CONFLICT (project_id, cache_key)
+                    DO UPDATE SET content = EXCLUDED.content, metadata = EXCLUDED.metadata, created_at = NOW();
+                    """,
+                    (project_id, cache_key, content, meta_json)
+                )
+    except psycopg.errors.ForeignKeyViolation:
+        logger.info(f"[PHASE 2 WORKER] Project {project_id} no longer exists (Foreign Key constraint). Skipping Phase 2 intelligence save for '{cache_key}'.")
+        return
+    except Exception as e:
+        if "foreign key" in str(e).lower() or "intelligence_cache_project_id_fkey" in str(e):
+            logger.info(f"[PHASE 2 WORKER] Project {project_id} no longer exists. Skipping Phase 2 intelligence save for '{cache_key}'.")
+            return
+        raise
 
