@@ -130,9 +130,14 @@ export function ChatPage() {
   };
 
   useEffect(() => {
-    // Requirements 4 & 11: Stop polling immediately if not ingesting or no project ID
+    // Requirements 1 & 4 & 11: Stop polling immediately if not ingesting or no project ID
     if (!isIngesting || !ingestionProjectId) {
       stopPolling();
+      setPollingStatus('queued');
+      setPercentage(0);
+      setFilesProcessed(0);
+      setTotalFiles(0);
+      setIngestionError(null);
       return;
     }
 

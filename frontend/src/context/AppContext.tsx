@@ -269,32 +269,42 @@ export function AppProvider({ children }: { children: ReactNode }) {
     toast.success('Started a new clean session.');
   }, [initializeSession]);
 
-  // Delete project with ingestion state cleanup
+  // Delete project with immediate frontend ingestion cleanup and 404 error suppression
   const deleteProject = useCallback(async (projectId: string) => {
     const currentGen = sessionGenRef.current;
+
+    // Requirement 1: IMMEDIATELY stop ingestion UI & state without waiting for network API response
+    if (ingestionProjectId === projectId) {
+      logWithTimestamp(`[DELETE] Immediately stopping ingestion state for project ${projectId}`);
+      localStorage.removeItem('gitsense_ingestion_project_id');
+      localStorage.removeItem('gitsense_is_ingesting');
+      setIngestionProjectId(null);
+      setIsIngesting(false);
+    }
+
+    if (currentProject?.project_id === projectId) {
+      setCurrentProject(null);
+      setFileTree([]);
+      setChatHistory([]);
+    }
+
+    // Requirement 1: Immediately remove project from sidebar project list
+    setProjects(prev => prev.filter(p => p.project_id !== projectId));
+
     try {
-      // Requirements 4 & 6: Immediate ingestion cleanup if deleted project is active
-      if (ingestionProjectId === projectId) {
-        logWithTimestamp(`Project ${projectId} deleted while active. Cleaning ingestion state.`);
-        localStorage.removeItem('gitsense_ingestion_project_id');
-        localStorage.removeItem('gitsense_is_ingesting');
-        setIngestionProjectId(null);
-        setIsIngesting(false);
-      }
-
-      if (currentProject?.project_id === projectId) {
-        setCurrentProject(null);
-        setFileTree([]);
-        setChatHistory([]);
-      }
-
       await apiService.deleteProject(projectId);
       if (currentGen !== sessionGenRef.current) return;
       toast.success('Project deleted successfully.');
-      await refreshProjects();
-    } catch (error) {
+    } catch (error: any) {
+      // Requirement 2: Treat 404 as successful cleanup (project already gone on backend)
+      if (error.response?.status === 404) {
+        logWithTimestamp(`[DELETE] Project ${projectId} already missing on backend (404). Cleaned up locally.`);
+        return;
+      }
       console.error('Failed to delete project:', error);
       toast.error('Failed to delete the project.');
+    } finally {
+      await refreshProjects();
     }
   }, [currentProject, ingestionProjectId, refreshProjects]);
 
