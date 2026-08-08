@@ -86,7 +86,33 @@ async def run_cleanup() -> dict:
             except Exception as e:
                 logger.error(f"Failed to delete session {session_id} from database: {e}")
                 errors.append(f"Database cleanup error for session {session_id}: {str(e)}")
-                
+
+        # 5. Sweep REPO_DIR for any orphaned repository folders (not actively indexing)
+        try:
+            repo_base = settings.repo_path
+            if repo_base.exists():
+                # Query actively indexing project IDs from database
+                active_indexing_ids = set()
+                try:
+                    async with get_db_connection() as conn:
+                        async with conn.cursor() as cur:
+                            await cur.execute(
+                                "SELECT id FROM projects WHERE status IN ('processing', 'cloning', 'parsing', 'generating embeddings', 'saving');"
+                            )
+                            rows = await cur.fetchall()
+                            active_indexing_ids = {str(r["id"]) for r in rows}
+                except Exception as active_err:
+                    logger.warning(f"Could not query active indexing projects during orphan sweep: {active_err}")
+
+                for child in repo_base.iterdir():
+                    if child.is_dir():
+                        folder_name = child.name
+                        if folder_name not in active_indexing_ids:
+                            logger.info(f"[CLEANUP] Found leftover repository directory on disk: {child}. Cleaning up...")
+                            await run_in_threadpool(robust_rmtree, child)
+        except Exception as sweep_err:
+            logger.warning(f"Error during orphaned repository sweep: {sweep_err}")
+
     except Exception as e:
         logger.error(f"Error during cleanup execution: {e}", exc_info=True)
         errors.append(f"Global cleanup error: {str(e)}")

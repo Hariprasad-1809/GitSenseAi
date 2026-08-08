@@ -222,8 +222,8 @@ async def get_or_generate_intelligence(
 ) -> str:
     """
     Smart Cache Lookup & Lazy Generation.
-    Checks DB cache for precomputed intelligence. If missing, generates it on-demand lazily,
-    saves it to the database, and returns it.
+    Checks DB cache for precomputed intelligence. If missing, generates it on-demand lazily from DB
+    or disk, saves it to the database, and returns it. Operates 100% independently of disk storage.
     """
     cached = await get_cached_intelligence(project_id, cache_key)
     if cached and cached.get("content"):
@@ -232,14 +232,60 @@ async def get_or_generate_intelligence(
 
     logger.info(f"[SMART CACHE MISS] Generating '{cache_key}' on-demand lazily for project {project_id}...")
     
-    # Lazy generation fallback
+    # Lazy generation fallback: Use disk if available, otherwise construct from database
     if repo_path and repo_path.exists():
         repo_map = build_lightweight_repo_map(repo_path)
+        sample_texts = []
+        for rel_file in repo_map.get("key_configs", []) + repo_map.get("entry_points", []):
+            full_p = repo_path / rel_file
+            if full_p.exists() and full_p.is_file():
+                try:
+                    text = full_p.read_text(encoding="utf-8", errors="ignore")[:3000]
+                    sample_texts.append(f"--- File: {rel_file} ---\n{text}")
+                except Exception:
+                    pass
+        context_samples = "\n\n".join(sample_texts) if sample_texts else f"Project: {project_name}"
     else:
-        repo_map = {"file_count": 0, "languages": {}}
+        # Build repo_map and context samples from PostgreSQL database tables
+        from app.core.vectorstore import get_project_files, retrieve_summary_context
+        db_files = await get_project_files(project_id)
+        
+        file_tree = [f["file_path"] for f in db_files]
+        folders = set()
+        languages = {}
+        entry_points = []
+        key_configs = []
+        
+        for f in db_files:
+            rel = f["file_path"]
+            ext = f.get("language") or "plain"
+            languages[ext] = languages.get(ext, 0) + 1
+            parts = rel.split("/")
+            if len(parts) > 1:
+                folders.add(parts[0])
+            fname = parts[-1].lower()
+            if fname in ("main.py", "app.py", "index.js", "index.ts", "server.js", "main.go", "main.rs", "run.py"):
+                entry_points.append(rel)
+            elif fname in ("package.json", "requirements.txt", "pyproject.toml", "dockerfile", "schema.sql"):
+                key_configs.append(rel)
 
-    context_samples = f"Project: {project_name}"
-    
+        repo_map = {
+            "file_count": len(db_files),
+            "folder_list": sorted(list(folders)),
+            "languages": languages,
+            "entry_points": entry_points,
+            "key_configs": key_configs,
+            "sample_file_tree": file_tree[:150]
+        }
+
+        # Fetch database chunks for context samples
+        db_chunks = await retrieve_summary_context(project_id)
+        sample_texts = [
+            f"--- File: {c['file_path']} (Lines {c['start_line']}-{c['end_line']}) ---\n{c['content'][:1500]}"
+            for c in db_chunks[:10]
+        ]
+        context_samples = "\n\n".join(sample_texts) if sample_texts else f"Project: {project_name}"
+
     if cache_key == "architecture_summary":
         summary = await generate_architecture_summary(project_id, project_name, repo_map, context_samples)
     elif cache_key == "workflow_summary":
@@ -248,5 +294,5 @@ async def get_or_generate_intelligence(
         summary = await generate_repository_summary(project_id, project_name, repo_map, context_samples)
 
     # Save to database cache for all future queries
-    await save_cached_intelligence(project_id, cache_key, summary, {"generated": "lazily_on_demand"})
+    await save_cached_intelligence(project_id, cache_key, summary, {"generated": "lazily_from_db"})
     return summary

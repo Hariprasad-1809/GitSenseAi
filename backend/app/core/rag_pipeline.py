@@ -37,7 +37,7 @@ async def run_indexing_pipeline(project_id: UUID, project_name: str, repo_path: 
     import time
     from app.core.chunker import compute_file_hash
 
-    logger.info(f"Starting parallel indexing pipeline for project '{project_name}' ({project_id}) at {repo_path}")
+    logger.info(f"[INGEST] Repository clone completed for project '{project_name}' ({project_id}) at {repo_path}")
     t0 = time.perf_counter()
 
     try:
@@ -51,10 +51,12 @@ async def run_indexing_pipeline(project_id: UUID, project_name: str, repo_path: 
                 all_file_paths.append(p)
 
         total_discovered = len(all_file_paths)
-        logger.info(f"Discovered {total_discovered} source files for project {project_id}")
+        logger.info(f"[INGEST] Files discovered: {total_discovered} for project {project_id}")
 
         if total_discovered == 0:
             await update_project_status(project_id, "completed", files_processed=0, total_files=0, current_file="")
+            from app.core.extractor import cleanup_project_files
+            await run_in_threadpool(cleanup_project_files, str(project_id))
             return
 
         await update_project_status(
@@ -77,14 +79,17 @@ async def run_indexing_pipeline(project_id: UUID, project_name: str, repo_path: 
             try:
                 content = p.read_text(encoding="utf-8", errors="ignore")
                 fhash = compute_file_hash(content)
+                size_bytes = p.stat().st_size
             except Exception:
                 content = ""
                 fhash = ""
+                size_bytes = 0
 
             all_file_entries.append({
                 "file_path": rel_path,
                 "language": ext,
-                "file_hash": fhash
+                "file_hash": fhash,
+                "size_bytes": size_bytes
             })
 
             # Check if unchanged
@@ -109,10 +114,15 @@ async def run_indexing_pipeline(project_id: UUID, project_name: str, repo_path: 
 
         if not files_to_process:
             # All files are up to date!
-            await update_project_status(project_id, "completed", files_processed=total_discovered, total_files=total_discovered, current_file="")
-            logger.info(f"All files unchanged. Indexing completed in {time.perf_counter() - t0:.2f}s.")
             from app.core.intelligence_engine import run_background_intelligence_worker
-            asyncio.create_task(run_background_intelligence_worker(project_id, project_name, repo_path))
+            await run_background_intelligence_worker(project_id, project_name, repo_path)
+            await update_project_status(project_id, "completed", files_processed=total_discovered, total_files=total_discovered, current_file="")
+            logger.info(f"[INGEST] Project marked completed: {project_id}")
+            # Clean temporary repository
+            from app.core.extractor import cleanup_project_files
+            logger.info(f"[CLEANUP] Removing temporary repository: {repo_path}")
+            await run_in_threadpool(cleanup_project_files, str(project_id))
+            logger.info(f"[CLEANUP] Temporary repository deleted successfully: {repo_path}")
             return
 
         # 3. Parallel Parsing Workers
@@ -148,7 +158,7 @@ async def run_indexing_pipeline(project_id: UUID, project_name: str, repo_path: 
         for chunk_list in results:
             parsed_chunks.extend(chunk_list)
 
-        logger.info(f"Parallel parsing completed. Generated {len(parsed_chunks)} total chunks from {len(files_to_process)} files.")
+        logger.info(f"[INGEST] Parsing completed: {len(files_to_process)}/{len(files_to_process)} (Generated {len(parsed_chunks)} total chunks).")
 
         # 4. Batched Embedding Generation & Database Storage
         if parsed_chunks:
@@ -162,7 +172,7 @@ async def run_indexing_pipeline(project_id: UUID, project_name: str, repo_path: 
             for chunk, emb in zip(parsed_chunks, embeddings):
                 chunk["embedding"] = emb
 
-            logger.info(f"Batched embedding finished in {time.perf_counter() - t_emb_start:.2f}s.")
+            logger.info(f"[INGEST] Embeddings generated in {time.perf_counter() - t_emb_start:.2f}s.")
 
             await update_project_status(
                 project_id, "saving", files_processed=total_discovered, total_files=total_discovered, current_file="Writing vector chunks to database..."
@@ -175,6 +185,11 @@ async def run_indexing_pipeline(project_id: UUID, project_name: str, repo_path: 
 
         # Save project files metadata
         await insert_project_files(project_id, all_file_entries)
+        logger.info(f"[INGEST] Database persistence completed")
+
+        # Generate & cache repository intelligence while repo_path still exists
+        from app.core.intelligence_engine import run_background_intelligence_worker
+        await run_background_intelligence_worker(project_id, project_name, repo_path)
 
         t_total = time.perf_counter() - t0
         logger.info(f"Phase 1 fast indexing completed successfully in {t_total:.2f} seconds for project '{project_name}' ({project_id}).")
@@ -183,11 +198,21 @@ async def run_indexing_pipeline(project_id: UUID, project_name: str, repo_path: 
         await update_project_status(
             project_id, "completed", files_processed=total_discovered, total_files=total_discovered, current_file=""
         )
+        logger.info(f"[INGEST] Project marked completed: {project_id}")
 
-        # 6. Asynchronous Background Intelligence Worker
-        from app.core.intelligence_engine import run_background_intelligence_worker
-        logger.info(f"Spawning Phase 2 background worker task for project {project_id}...")
-        asyncio.create_task(run_background_intelligence_worker(project_id, project_name, repo_path))
+        # 6. Delete temporary cloned repository folder after successful persistence and completion
+        from app.core.extractor import cleanup_project_files
+        logger.info(f"[CLEANUP] Removing temporary repository: {repo_path}")
+        try:
+            await run_in_threadpool(cleanup_project_files, str(project_id))
+            if not repo_path.exists():
+                logger.info(f"[CLEANUP] Temporary repository deleted successfully: {repo_path}")
+            else:
+                logger.warning(f"[CLEANUP] Temporary repository cleanup warning (locked files): {repo_path}")
+        except Exception as cleanup_err:
+            logger.warning(f"[CLEANUP] Temporary repository cleanup error after indexing for {project_id}: {cleanup_err}")
+            from app.services.cleanup_service import retry_cleanup_background
+            asyncio.create_task(retry_cleanup_background(repo_path))
 
     except Exception as e:
         logger.error(f"Error during parallel indexing pipeline for project {project_id}: {e}", exc_info=True)

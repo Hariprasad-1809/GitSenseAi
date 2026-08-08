@@ -33,6 +33,7 @@ CREATE TABLE IF NOT EXISTS files (
     project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
     file_path TEXT NOT NULL,
     language TEXT NOT NULL,
+    size_bytes BIGINT DEFAULT 0,
     file_hash VARCHAR(64),
     created_at TIMESTAMPTZ DEFAULT NOW(),
     UNIQUE (project_id, file_path)

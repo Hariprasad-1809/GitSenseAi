@@ -25,12 +25,33 @@ def robust_rmtree(path: Path) -> bool:
     """
     Robustly deletes a directory tree, resolving read-only file locks on Windows,
     closing GitPython repository objects, and retrying with exponential backoff.
+    Verifies that target path is inside configured storage directories for security.
     Returns True if successfully deleted, False otherwise.
     """
     if not path.exists():
         return True
 
-    logger.info("Cleaning repository: %s", path)
+    from app.config import settings
+
+    # Security check: Ensure target path is strictly inside REPO_DIR or UPLOAD_DIR
+    try:
+        resolved_target = path.resolve()
+        allowed_dirs = [settings.repo_path.resolve(), settings.upload_path.resolve()]
+        is_safe = any(
+            resolved_target != allowed_dir and resolved_target.is_relative_to(allowed_dir)
+            for allowed_dir in allowed_dirs
+        )
+        if not is_safe:
+            logger.error(
+                "[CLEANUP SECURITY REJECTION] Refusing to delete path '%s'. Path is not inside allowed repository directories: %s",
+                resolved_target, allowed_dirs
+            )
+            return False
+    except Exception as path_err:
+        logger.error("[CLEANUP SECURITY REJECTION] Error validating path boundary for '%s': %s", path, path_err)
+        return False
+
+    logger.info("[CLEANUP] Cleaning temporary repository directory: %s", path)
 
     # Close any GitPython repo objects and run garbage collection
     try:

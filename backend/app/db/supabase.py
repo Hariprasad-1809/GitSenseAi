@@ -202,6 +202,7 @@ async def init_db(schema_path: str = "app/db/schema.sql") -> None:
                 await cur.execute("ALTER TABLE projects ADD COLUMN IF NOT EXISTS current_file TEXT DEFAULT '';")
                 await cur.execute("ALTER TABLE chunks ADD COLUMN IF NOT EXISTS metadata JSONB DEFAULT '{}'::jsonb;")
                 await cur.execute("ALTER TABLE files ADD COLUMN IF NOT EXISTS file_hash VARCHAR(64);")
+                await cur.execute("ALTER TABLE files ADD COLUMN IF NOT EXISTS size_bytes BIGINT DEFAULT 0;")
         logger.info("Database schema initialized successfully.")
     except Exception as e:
         logger.exception("Failed to initialize database schema")

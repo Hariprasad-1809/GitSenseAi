@@ -99,7 +99,7 @@ async def delete_file_chunks(project_id: UUID, file_paths: List[str]) -> None:
 
 async def insert_project_files(project_id: UUID, file_entries: List[Dict[str, Any]]) -> None:
     """
-    Inserts file metadata records (with file_hash) into the files table.
+    Inserts file metadata records (with file_hash and size_bytes) into the files table.
     """
     if not file_entries:
         return
@@ -108,12 +108,12 @@ async def insert_project_files(project_id: UUID, file_entries: List[Dict[str, An
         async with conn.cursor() as cur:
             await cur.executemany(
                 """
-                INSERT INTO files (project_id, file_path, language, file_hash)
-                VALUES (%s, %s, %s, %s)
+                INSERT INTO files (project_id, file_path, language, file_hash, size_bytes)
+                VALUES (%s, %s, %s, %s, %s)
                 ON CONFLICT (project_id, file_path) 
-                DO UPDATE SET file_hash = EXCLUDED.file_hash, language = EXCLUDED.language;
+                DO UPDATE SET file_hash = EXCLUDED.file_hash, language = EXCLUDED.language, size_bytes = EXCLUDED.size_bytes;
                 """,
-                [(project_id, f["file_path"], f["language"], f.get("file_hash", "")) for f in file_entries]
+                [(project_id, f["file_path"], f["language"], f.get("file_hash", ""), f.get("size_bytes", 0)) for f in file_entries]
             )
 
 
@@ -257,13 +257,13 @@ async def delete_project(project_id: UUID) -> bool:
 
 async def get_project_files(project_id: UUID) -> List[Dict[str, Any]]:
     """
-    Retrieves the complete flat list of files for a project.
+    Retrieves the complete flat list of files for a project including size_bytes.
     """
     async with get_db_connection() as conn:
         async with conn.cursor() as cur:
             await cur.execute(
                 """
-                SELECT file_path, language
+                SELECT file_path, language, size_bytes
                 FROM files
                 WHERE project_id = %s
                 ORDER BY file_path ASC;

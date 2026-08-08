@@ -222,32 +222,21 @@ async def get_project_file_tree(
     project_id: uuid.UUID = Depends(validate_project_session)
 ):
     """
-    Returns a complete flat listing of files indexed in a project with their size in bytes.
+    Returns a complete flat listing of files indexed in a project with their size in bytes from the database.
+    Operates 100% independently of local disk storage.
     """
     try:
-        # Retrieve files from db
+        # Retrieve files directly from database metadata
         db_files = await get_project_files(project_id)
         
-        # Calculate file sizes from the file system
-        file_entries = []
-        for file in db_files:
-            file_path = file["file_path"]
-            abs_path = settings.repo_path / str(project_id) / file_path
-            
-            size_bytes = 0
-            if abs_path.is_file():
-                try:
-                    size_bytes = abs_path.stat().st_size
-                except Exception:
-                    size_bytes = 0
-                    
-            file_entries.append(
-                FileEntry(
-                    file_path=file_path,
-                    language=file["language"],
-                    size_bytes=size_bytes
-                )
+        file_entries = [
+            FileEntry(
+                file_path=file["file_path"],
+                language=file["language"],
+                size_bytes=file.get("size_bytes", 0) or 0
             )
+            for file in db_files
+        ]
             
         return FileTreeResponse(
             project_id=project_id,
